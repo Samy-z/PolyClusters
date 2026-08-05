@@ -138,10 +138,17 @@ class TagBootstrapWorker(_Cancellable):
                 self.message.emit(f"  {len(curated)} headline sectors ready.")
             if self.is_cancelled():
                 return len(curated)
-            everything = await fetch_all_tags(client)
+            try:
+                everything = await fetch_all_tags(client)
+            except Exception as exc:  # noqa: BLE001
+                # The pinned sectors are already stored, so the picker is
+                # usable; a partial catalogue beats an empty one.
+                self.message.emit(f"  full catalogue unavailable ({exc}); "
+                                  "headline sectors are still selectable.")
+                everything = pd.DataFrame()
             if not everything.empty:
                 self.db.upsert_tags(everything)
-            total = len(everything) if not everything.empty else len(curated)
+            total = int(self.db.scalar("SELECT count(*) FROM tags") or len(curated))
         self.message.emit(f"  {total} sectors available in the picker.")
         return total
 

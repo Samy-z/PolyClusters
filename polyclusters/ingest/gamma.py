@@ -162,11 +162,23 @@ async def fetch_curated_tags(client: PolymarketClient) -> pd.DataFrame:
 
 
 async def fetch_all_tags(client: PolymarketClient, max_pages: int = 60) -> pd.DataFrame:
-    """Page the full tag catalogue (the app's "sector" vocabulary)."""
+    """Page the full tag catalogue (the app's "sector" vocabulary).
+
+    A page that fails after its retries ends the walk and returns what was
+    collected so far. Sixty sequential pages is enough requests that an
+    occasional throttle is normal, and losing the whole catalogue - leaving the
+    picker with only the pinned sectors - is far worse than returning a
+    slightly short one.
+    """
     rows: list[dict[str, Any]] = []
     seen: set[int] = set()
     for page in range(max_pages):
-        batch = await client.gamma("/tags", limit=GAMMA_MAX_LIMIT, offset=page * GAMMA_MAX_LIMIT)
+        try:
+            batch = await client.gamma(
+                "/tags", limit=GAMMA_MAX_LIMIT, offset=page * GAMMA_MAX_LIMIT
+            )
+        except Exception:  # noqa: BLE001 - keep the pages already gathered
+            break
         if not isinstance(batch, list) or not batch:
             break
         for tag in batch:
