@@ -7,34 +7,37 @@ coordinated books, or a single operator running many wallets.
 Everything runs locally against Polymarket's public, unauthenticated APIs.
 Python + Qt, so it runs on Windows, macOS and Linux from the same source.
 
+## Getting started
+
+Double-click **`run.bat`** on Windows, or run **`./run.sh`** on macOS and Linux.
+
+The first launch builds a virtual environment, installs the dependencies, and —
+on Windows — puts a **PolyClusters shortcut on your Desktop, in the Start Menu
+and in the project folder**, all carrying the app icon. After that, launch from
+the shortcut. Nothing else to set up.
+
+Requires Python 3.11 or newer on PATH.
+
+<details>
+<summary>Manual setup, or moving the project afterwards</summary>
+
 ```bash
-# Windows
-run.bat
-
-# macOS / Linux
-./run.sh
-```
-
-Both scripts create a virtual environment and install dependencies on first run.
-To do it by hand:
-
-```bash
-python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python -m polyclusters
 ```
 
-On Windows, to create `PolyClusters.lnk` in the project folder, on the Desktop
-and in the Start Menu, all carrying the app icon:
+Shortcuts embed absolute paths, so they are generated per machine rather than
+shipped, and are git-ignored. If you move the project, recreate them:
 
 ```bash
 .venv/Scripts/python scripts/make_shortcut.py
 ```
 
-Add `--project-only` or `--desktop-only` to narrow that. Each shortcut targets
-the venv's `pythonw.exe` so no console window appears, and builds
-`assets/PolyClusters.ico` first if it is missing. The `.lnk` files embed
-absolute paths, so they are git-ignored — rerun the script after moving the
-project.
+`--project-only` or `--desktop-only` narrows where they go. Each one targets the
+venv's `pythonw.exe`, so launching opens no console window.
+
+</details>
 
 ---
 
@@ -180,7 +183,12 @@ context-menu links to the wallet or market on Polymarket.
 .venv/Scripts/python scripts/smoke_test.py    # backend: ingest + cluster, real API
 .venv/Scripts/python scripts/smoke_test.py --fresh   # force a re-crawl
 .venv/Scripts/python scripts/ui_smoke.py      # builds every panel, writes screenshots/
+.venv/Scripts/python scripts/sector_smoke.py  # first-run path on a wiped database
 ```
+
+The tests run against the live API rather than mocks. Every hard problem here
+came from the API behaving unlike its documentation, and a mock would have
+faithfully reproduced the documentation.
 
 Layout: `core/` storage · `ingest/` API clients and crawler · `analysis/`
 positions, similarity, clustering, metrics · `ui/` Qt panels and widgets.
