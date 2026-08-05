@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+scripts/_*.duckdb*
+screenshots/
+build/
+dist/
+*.spec
+
+
+# Generated shortcuts embed absolute paths for this machine
+*.lnk
