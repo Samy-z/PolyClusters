@@ -197,4 +197,6 @@ QFrame#card {{
     border: 1px solid {BORDER};
     border-radius: 6px;
 }}
+/* The metric strip scrolls sideways; it must not paint its own panel. */
+QScrollArea#statRow, QWidget#statRowInner {{ background: transparent; border: none; }}
 """

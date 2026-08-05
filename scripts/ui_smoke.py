@@ -49,8 +49,9 @@ def main() -> int:
     settings.min_user_bets = 2
     db = Database(db_file)
     win = MainWindow(db, settings)
-    win.resize(1680, 980)
-    win.show()
+    # Maximised on the primary screen, exactly as the app launches, so the
+    # screenshots show the layout a user actually gets.
+    win.showMaximized()
 
     filters = AnalysisFilters(start_ts=0, end_ts=0, min_market_volume=0)
     params = ClusterParams(

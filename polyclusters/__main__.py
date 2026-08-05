@@ -48,7 +48,9 @@ def main(argv: list[str] | None = None) -> int:
     db = Database()
 
     window = MainWindow(db, settings)
-    window.show()
+    # Maximised on the primary screen. The window's restored geometry is already
+    # sized to that monitor, so un-maximising lands somewhere sensible too.
+    window.showMaximized()
     return app.exec()
 
 

@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QStatusBar, QTabWidget,
     QToolBar, QWidget,
@@ -39,16 +39,17 @@ class MainWindow(QMainWindow):
         self._worker: Any = None
 
         self.setWindowTitle("PolyClusters")
-        self.resize(1680, 980)
         self.setStyleSheet(STYLESHEET)
+        self._size_to_primary_screen()
 
         # -- left dock ------------------------------------------------------
         self.controls = ControlPanel(db, settings)
         dock = QDockWidget("Controls", self)
         dock.setObjectName("controlsDock")
         dock.setWidget(self.controls)
-        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        dock.setMinimumWidth(330)
+        # Pinned in place. Floating it is easy by accident and awkward to undo,
+        # since redocking means hitting a narrow drop target on the left edge.
+        dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.controls_dock = dock
 
@@ -75,6 +76,52 @@ class MainWindow(QMainWindow):
         self._apply_icon()
         self._refresh_db_label()
         self._first_run_hint()
+
+    # -- geometry -----------------------------------------------------------
+    def _size_to_primary_screen(self) -> None:
+        """Fit the restored window to the primary monitor, centred on it.
+
+        A fixed pixel size spills across a multi-monitor desktop: 1680px wide
+        lands a quarter of the window on the second screen. This also fixes
+        which screen showMaximized() picks, since Qt maximises onto whichever
+        screen the window currently occupies.
+        """
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1280, 860)
+            return
+        area = screen.availableGeometry()
+        size = QSize(int(area.width() * 0.92), int(area.height() * 0.92))
+        self.resize(size)
+        frame = self.frameGeometry()
+        frame.moveCenter(area.center())
+        self.move(frame.topLeft())
+
+    def _fit_controls_dock(self) -> None:
+        """Give the dock the width its contents actually need.
+
+        The panel is a scroll area with horizontal scrolling off, so anything
+        wider than the viewport was simply clipped - which is why labels and
+        buttons were losing their right-hand edge.
+        """
+        panel = self.controls
+        needed = panel.widget().minimumSizeHint().width() if panel.widget() else 0
+        scrollbar = panel.verticalScrollBar().sizeHint().width()
+        width = needed + scrollbar + 2 * panel.frameWidth() + 4
+        width = max(width, 300)
+
+        self.controls_dock.setMinimumWidth(width)
+        # Leave headroom so the user can widen it, but not drag it narrower
+        # than the content, which is what caused the clipping.
+        self.controls_dock.setMaximumWidth(max(width * 2, 640))
+        self.resizeDocks([self.controls_dock], [width], Qt.Horizontal)
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802
+        """Size the dock once the real font metrics are known."""
+        super().showEvent(event)
+        if not getattr(self, "_dock_fitted", False):
+            self._dock_fitted = True
+            self._fit_controls_dock()
 
     # -- branding -----------------------------------------------------------
     def _build_header(self) -> None:

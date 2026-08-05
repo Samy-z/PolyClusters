@@ -7,7 +7,9 @@ from typing import Iterable
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 from ..models import fmt_value
 from ..theme import BAD, FG, FG_DIM, GOOD
@@ -42,13 +44,27 @@ class StatCard(QFrame):
         self.value.setStyleSheet(f"color: {colour};")
 
 
-class StatRow(QWidget):
-    """A horizontal strip of StatCards addressed by key."""
+class StatRow(QScrollArea):
+    """A horizontal strip of StatCards addressed by key.
+
+    Scrolls sideways rather than sizing itself. Fourteen cards at their natural
+    width demand about 1660px, and a plain widget would push that into the
+    window's minimum size - enough to make the window wider than a 1536px
+    monitor and spill it onto the next screen.
+    """
 
     def __init__(self, specs: Iterable[tuple[str, str, str]], parent: QWidget | None = None):
         """specs: (key, label, tooltip)"""
         super().__init__(parent)
-        lay = QHBoxLayout(self)
+        self.setObjectName("statRow")
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        inner.setObjectName("statRowInner")
+        lay = QHBoxLayout(inner)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(7)
         self.cards: dict[str, StatCard] = {}
@@ -57,6 +73,12 @@ class StatRow(QWidget):
             self.cards[key] = card
             lay.addWidget(card)
         lay.addStretch(1)
+
+        self.setWidget(inner)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setFixedHeight(
+            inner.sizeHint().height() + self.horizontalScrollBar().sizeHint().height()
+        )
 
     def set(self, key: str, value: object, fmt: str = "auto", signed: bool = False) -> None:
         card = self.cards.get(key)
