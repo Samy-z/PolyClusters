@@ -36,24 +36,6 @@ the venv's `pythonw.exe` so no console window appears, and builds
 absolute paths, so they are git-ignored — rerun the script after moving the
 project.
 
-### Assets
-
-| File | Purpose |
-| --- | --- |
-| `PolyClusters_logo_display.png` | wordmark, light background |
-| `PolyClusters_logo_display_dark.png` | wordmark used in the app, hand-maintained |
-| `PolyClusters_logo_icon.png` | source mark |
-| `PolyClusters.ico` | multi-resolution icon (16–256 px), generated |
-
-A separate dark wordmark exists because the navy half of the light one is
-effectively invisible against the app background. It is **edited by hand** — no
-script writes to it, so nothing can overwrite the manual touch-ups. Swap the
-file to change the logo; the app falls back to the light version, then to a
-plain text wordmark, if it is missing.
-
-Only the `.ico` is generated, by `scripts/build_assets.py` (needs Pillow,
-dev-time only). Rerun it after changing `PolyClusters_logo_icon.png`.
-
 ---
 
 ## How it works
