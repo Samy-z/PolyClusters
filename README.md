@@ -193,6 +193,10 @@ faithfully reproduced the documentation.
 Layout: `core/` storage · `ingest/` API clients and crawler · `analysis/`
 positions, similarity, clustering, metrics · `ui/` Qt panels and widgets.
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ---
 
 *Clusters are statistical associations, not proof of wrongdoing. Co-betting can
