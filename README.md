@@ -38,19 +38,21 @@ project.
 
 ### Assets
 
-`assets/` holds the two source images plus two files generated from them by
-`scripts/build_assets.py` (needs Pillow, dev-time only):
-
 | File | Purpose |
 | --- | --- |
-| `PolyClusters_logo_display.png` | source wordmark |
+| `PolyClusters_logo_display.png` | wordmark, light background |
+| `PolyClusters_logo_display_dark.png` | wordmark used in the app, hand-maintained |
 | `PolyClusters_logo_icon.png` | source mark |
-| `PolyClusters_logo_display_dark.png` | wordmark recoloured for the dark UI |
-| `PolyClusters.ico` | multi-resolution icon (16–256 px) |
+| `PolyClusters.ico` | multi-resolution icon (16–256 px), generated |
 
-The dark variant is necessary because the navy half of the wordmark sits at
-about **1.08:1** contrast against the app background — invisible. Recolouring
-lifts it to **13.1:1**. Regenerate both after changing either source image.
+A separate dark wordmark exists because the navy half of the light one is
+effectively invisible against the app background. It is **edited by hand** — no
+script writes to it, so nothing can overwrite the manual touch-ups. Swap the
+file to change the logo; the app falls back to the light version, then to a
+plain text wordmark, if it is missing.
+
+Only the `.ico` is generated, by `scripts/build_assets.py` (needs Pillow,
+dev-time only). Rerun it after changing `PolyClusters_logo_icon.png`.
 
 ---
 
