@@ -522,6 +522,9 @@ class MainWindow(QMainWindow):
         self.compare_panel.set_result(result)
         self.watchlist_panel.set_result(result)
         self._refresh_watch_badge()
+        # The controls did their job; the results deserve the width now.
+        if result.ok and self.controls_dock.isVisible():
+            self.collapse_controls()
         if result.ok:
             self.tabs.setCurrentWidget(self.clusters_panel)
             s = result.stats

@@ -76,6 +76,78 @@ def wallet_positions(db: Database, wallet: str) -> pd.DataFrame:
     return df.sort_values("first_buy_ts", ascending=False)
 
 
+def performance(db: Database, wallets: list[str]) -> dict[str, Any]:
+    """Realised performance for one wallet or a whole group.
+
+    Every ROI here is realised: settled P&L over the dollars staked on settled
+    bets, so an open book cannot flatter the number. The longshot / favourite
+    split is the discriminating one - a high overall ROI earned entirely above
+    50c is favourite-grinding, the same figure below 50c is information.
+    """
+    wallets = [w.lower() for w in wallets if w]
+    if not wallets:
+        return {}
+    marks = ",".join("?" * len(wallets))
+    df = db.query(
+        f"""
+        SELECT t.proxy_wallet, t.condition_id, t.outcome_index,
+               any_value(m.resolved)         AS resolved,
+               any_value(m.winning_outcome)  AS winner,
+               sum(CASE WHEN t.side='BUY'  THEN t.size ELSE 0 END) AS buy_shares,
+               sum(CASE WHEN t.side='BUY'  THEN t.usd  ELSE 0 END) AS buy_usd,
+               sum(CASE WHEN t.side='SELL' THEN t.size ELSE 0 END) AS sell_shares,
+               sum(CASE WHEN t.side='SELL' THEN t.usd  ELSE 0 END) AS sell_usd
+        FROM trades t LEFT JOIN markets m USING (condition_id)
+        WHERE t.proxy_wallet IN ({marks})
+        GROUP BY t.proxy_wallet, t.condition_id, t.outcome_index
+        """,
+        wallets,
+    )
+    if df.empty:
+        return {}
+    for col in ("buy_shares", "buy_usd", "sell_shares", "sell_usd"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df = df[df.buy_shares > 0].copy()
+    if df.empty:
+        return {}
+    df["entry"] = df.buy_usd / df.buy_shares
+
+    winner = pd.to_numeric(df.winner, errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
+    outcome = pd.to_numeric(df.outcome_index, errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
+    decided = df.resolved.fillna(False).astype(bool).to_numpy() & np.isfinite(winner)
+    won = np.where(decided, (outcome == winner).astype(float), np.nan)
+    payout = np.where(won == 1.0, 1.0, 0.0)
+    net = (df.buy_shares - df.sell_shares).to_numpy()
+    pnl = np.where(decided, df.sell_usd.to_numpy() + net * payout - df.buy_usd.to_numpy(), np.nan)
+
+    def _roi(mask: np.ndarray) -> tuple[float, float, float]:
+        staked = float(df.buy_usd.to_numpy()[mask].sum())
+        gained = float(np.nansum(pnl[mask]))
+        return (gained / staked if staked > 0 else np.nan), gained, staked
+
+    settled = decided
+    longshot = settled & (df.entry.to_numpy() < 0.5)
+    favourite = settled & (df.entry.to_numpy() >= 0.5)
+
+    roi, pnl_total, staked_settled = _roi(settled)
+    longshot_roi, longshot_pnl, longshot_staked = _roi(longshot)
+    favourite_roi, favourite_pnl, favourite_staked = _roi(favourite)
+    return {
+        "staked_total": float(df.buy_usd.sum()),
+        "staked_settled": staked_settled,
+        "realised_pnl": pnl_total,
+        "roi": roi,
+        "longshot_roi": longshot_roi,
+        "longshot_pnl": longshot_pnl,
+        "longshot_staked": longshot_staked,
+        "favourite_roi": favourite_roi,
+        "favourite_pnl": favourite_pnl,
+        "favourite_staked": favourite_staked,
+        "settled_bets": int(settled.sum()),
+        "winrate": float(np.nanmean(won)) if settled.any() else np.nan,
+    }
+
+
 def entry_price_histogram(positions: pd.DataFrame, bins: int = PRICE_BINS) -> pd.DataFrame:
     """Dollars staked per entry-price bucket.
 

@@ -28,9 +28,14 @@ class CollapsedControlsStrip(QWidget):
 
     clicked = Signal()
 
-    def __init__(self, text: str = "CONTROLS", parent: QWidget | None = None):
+    def __init__(self, text: str = "CONTROLS", direction: str = "right",
+                 parent: QWidget | None = None):
+        """``direction`` is the way the panel opens: a strip on the left edge
+        opens rightward, one on the right edge opens leftward - the chevron and
+        the border follow it."""
         super().__init__(parent)
         self._text = text
+        self._direction = direction
         self._hover = False
         self.setFixedWidth(STRIP_WIDTH)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
@@ -61,14 +66,17 @@ class CollapsedControlsStrip(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(BG_ALT if self._hover else BG_RAISED))
 
+        # Border on the side the panel opens toward.
         painter.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
-        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+        edge = self.width() - 1 if self._direction == "right" else 0
+        painter.drawLine(edge, 0, edge, self.height())
 
-        # A chevron at the top hints which way it opens.
+        # A chevron at the top pointing the way the panel opens.
         painter.setPen(QPen(QColor(ACCENT if self._hover else FG_DIM), 1.6))
         cx, cy = self.width() / 2, 14
-        painter.drawLine(cx - 3, cy - 3, cx + 2, cy)
-        painter.drawLine(cx + 2, cy, cx - 3, cy + 3)
+        tip = 2.5 if self._direction == "right" else -2.5
+        painter.drawLine(cx - tip, cy - 3, cx + tip, cy)
+        painter.drawLine(cx + tip, cy, cx - tip, cy + 3)
 
         font = QFont(self.font())
         font.setPointSizeF(max(font.pointSizeF(), 8.0))

@@ -124,7 +124,8 @@ class MetricGrid(QFrame):
             if fmt in ("pct", "usd", "ratio", "num") and isinstance(
                 value, (int, float, np.integer, np.floating)
             ) and np.isfinite(value):
-                if label.lower() in ("p&l", "roi", "edge/share"):
+                if label.lower() in ("p&l", "roi", "edge/share",
+                                     "longshot roi", "favourite roi"):
                     display.setStyleSheet(
                         f"font-size: 14px; font-weight: 700; "
                         f"color: {GOOD if value > 0 else (BAD if value < 0 else FG)};"
@@ -281,8 +282,8 @@ class WatchDetailPanel(QScrollArea):
         positions = profile.wallet_positions(self.db, wallet)
         signals = wallet_signals(self.db, wallet)
         cotraders = profile.wallet_cotraders(self.db, wallet)
+        perf = profile.performance(self.db, [wallet])
         open_now = positions[positions.status == "open"] if not positions.empty else positions
-        settled = positions[positions.status != "open"] if not positions.empty else positions
 
         badges: list[tuple[str, str]] = []
         shadow = signals.get("top_cotrader_share")
@@ -298,15 +299,17 @@ class WatchDetailPanel(QScrollArea):
             badges.append(("thin markets", WARN))
         self._set_badges(badges)
 
-        realised = float(settled.pnl.sum()) if not settled.empty else np.nan
         self.metrics.set_items([
             ("Staked", signals.get("staked"), "usd"),
-            ("Bets", signals.get("n_bets"), "int"),
-            ("Markets", signals.get("n_markets"), "int"),
+            ("P&L", perf.get("realised_pnl"), "usd"),
+            ("ROI", perf.get("roi"), "pct"),
+            ("Longshot ROI", perf.get("longshot_roi"), "pct"),
+            ("Favourite ROI", perf.get("favourite_roi"), "pct"),
+            ("Edge/share", signals.get("edge_per_share"), "ratio"),
             ("Winrate", signals.get("winrate"), "pct"),
             ("Longshot WR", signals.get("longshot_winrate"), "pct"),
-            ("P&L", realised, "usd"),
-            ("Edge/share", signals.get("edge_per_share"), "ratio"),
+            ("Bets", signals.get("n_bets"), "int"),
+            ("Markets", signals.get("n_markets"), "int"),
             ("Median entry", signals.get("median_entry"), "ratio"),
             ("Median mkt vol", signals.get("median_market_volume"), "usd"),
             ("Open now", float(open_now.buy_usd.sum()) if not open_now.empty else 0.0, "usd"),
@@ -373,6 +376,7 @@ class WatchDetailPanel(QScrollArea):
         members = profile.cluster_members(self.db, wallets)
         labels, matrix = profile.cluster_overlap(self.db, wallets)
         names = dict(zip(members.proxy_wallet, members.display)) if not members.empty else {}
+        perf = profile.performance(self.db, wallets)
 
         badges = []
         matched = str(row.get("matched") or "—")
@@ -391,6 +395,10 @@ class WatchDetailPanel(QScrollArea):
         self.metrics.set_items([
             ("Members", len(wallets), "int"),
             ("Staked", row.get("staked"), "usd"),
+            ("P&L", perf.get("realised_pnl"), "usd"),
+            ("ROI", perf.get("roi"), "pct"),
+            ("Longshot ROI", perf.get("longshot_roi"), "pct"),
+            ("Favourite ROI", perf.get("favourite_roi"), "pct"),
             ("Winrate", row.get("winrate"), "pct"),
             ("Cohesion", cohesion, "pct"),
             ("Joined since", row.get("joined"), "int"),

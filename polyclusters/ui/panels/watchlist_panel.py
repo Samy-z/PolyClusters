@@ -151,7 +151,7 @@ class WatchlistPanel(QWidget):
         self.body_splitter.setStretchFactor(0, 3)
         self.body_splitter.setStretchFactor(1, 2)
 
-        self.detail_strip = CollapsedControlsStrip("DETAILS")
+        self.detail_strip = CollapsedControlsStrip("DETAILS", direction="left")
         self.detail_strip.setToolTip("Show the detail panel")
         self.detail_strip.clicked.connect(self.expand_detail)
         self.detail_strip.hide()
