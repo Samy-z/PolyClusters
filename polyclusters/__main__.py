@@ -6,7 +6,7 @@ import os
 import sys
 
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .config import APP_ICO, APP_NAME, AppSettings, LOGO_ICON, WINDOWS_APP_ID
 from .core.db import Database
@@ -45,7 +45,24 @@ def main(argv: list[str] | None = None) -> int:
         app.setWindowIcon(QIcon(str(icon_path)))
 
     settings = AppSettings.load()
-    db = Database()
+    try:
+        db = Database()
+    except Exception as exc:  # noqa: BLE001
+        # Launched under pythonw there is no console, so an unhandled failure
+        # here looks like the shortcut simply doing nothing. DuckDB takes an
+        # exclusive lock, so a second instance is the usual cause.
+        already_open = "another process" in str(exc).lower() or "being used" in str(exc).lower()
+        QMessageBox.critical(
+            None,
+            f"{APP_NAME} cannot start",
+            (
+                "PolyClusters is already running.\n\nThe database is held open by "
+                "the other window — switch to it, or close it and try again."
+                if already_open else
+                f"Could not open the database.\n\n{exc}"
+            ),
+        )
+        return 1
 
     window = MainWindow(db, settings)
     # Maximised on the primary screen. The window's restored geometry is already
