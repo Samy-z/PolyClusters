@@ -25,17 +25,43 @@ def _safe_div(a, b):
                      where=np.asarray(b, dtype=float) != 0)
 
 
+def _float_col(df: pd.DataFrame, name: str, length: int, default: float = 0.0) -> np.ndarray:
+    """A dataframe column as a plain float64 array, missing values filled."""
+    if name not in df.columns:
+        return np.full(length, default)
+    values = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
+    return np.nan_to_num(values, nan=default)
+
+
 def _robust_z(series: pd.Series) -> pd.Series:
-    """Median/MAD z-score - a handful of extreme clusters must not flatten the rest."""
-    s = pd.to_numeric(series, errors="coerce")
-    med = s.median()
-    mad = (s - med).abs().median()
+    """Median/MAD z-score - a handful of extreme clusters must not flatten the rest.
+
+    Everything is forced through a plain float64 array first. A column that is
+    entirely missing arrives as pandas' nullable dtype, whose std() is pd.NA
+    rather than NaN, and `not np.isfinite(pd.NA)` raises instead of being true.
+    That happens for real: an unresolved market has no winning outcome, so every
+    win-rate column is missing, and a run that finds a single cluster has no
+    spread to measure anyway.
+    """
+    values = pd.to_numeric(series, errors="coerce")
+    index = values.index
+    arr = np.asarray(values.astype("float64").to_numpy(dtype="float64", na_value=np.nan))
+    zeros = pd.Series(np.zeros(len(arr)), index=index)
+
+    finite = arr[np.isfinite(arr)]
+    if finite.size < 2:  # nothing to rank against
+        return zeros
+
+    med = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - med)))
     if not np.isfinite(mad) or mad < EPS:
-        std = s.std()
+        std = float(np.std(finite, ddof=1))
         if not np.isfinite(std) or std < EPS:
-            return pd.Series(np.zeros(len(s)), index=s.index)
-        return ((s - med) / std).fillna(0.0)
-    return ((s - med) / (1.4826 * mad)).fillna(0.0)
+            return zeros
+        scale = std
+    else:
+        scale = 1.4826 * mad
+    return pd.Series(np.nan_to_num((arr - med) / scale, nan=0.0), index=index)
 
 
 def attach_clusters(ps: PositionSet, membership: pd.DataFrame) -> pd.DataFrame:
@@ -462,13 +488,21 @@ def compute_suspicion(
         used += weight
     raw = total / used if used else total
 
-    # Confidence damping: a cluster needs both members and resolved bets.
-    n_res = out.get("resolved_positions", pd.Series(np.zeros(len(out)), index=out.index)).fillna(0)
-    sample = np.tanh(n_res / 10.0) * np.tanh(out.n_members / 3.0)
+    # Confidence damping: a cluster needs both members and resolved bets. These
+    # go through float64 for the same reason as the z-scores - with nothing
+    # resolved yet the column is all-missing and may carry pandas NA.
+    n_res = _float_col(out, "resolved_positions", len(out))
+    n_members = _float_col(out, "n_members", len(out))
+    sample = np.tanh(n_res / 10.0) * np.tanh(n_members / 3.0)
     out["suspicion_raw"] = raw
     out["suspicion_score"] = raw * sample
-    lo, hi = out.suspicion_score.min(), out.suspicion_score.max()
+
+    score = np.nan_to_num(
+        pd.to_numeric(out.suspicion_score, errors="coerce").to_numpy(dtype="float64"),
+        nan=0.0,
+    )
+    lo, hi = float(score.min()), float(score.max())
     out["suspicion_pct"] = (
-        100.0 * (out.suspicion_score - lo) / (hi - lo) if hi > lo else 50.0
+        100.0 * (score - lo) / (hi - lo) if hi > lo else np.full(len(out), 50.0)
     )
     return out.sort_values("suspicion_score", ascending=False).reset_index(drop=True)

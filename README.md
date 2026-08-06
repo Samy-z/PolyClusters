@@ -258,11 +258,20 @@ held by at least half its members.
 ## Development
 
 ```bash
-.venv/Scripts/python scripts/smoke_test.py    # backend: ingest + cluster, real API
-.venv/Scripts/python scripts/smoke_test.py --fresh   # force a re-crawl
-.venv/Scripts/python scripts/ui_smoke.py      # builds every panel, writes screenshots/
-.venv/Scripts/python scripts/sector_smoke.py  # first-run path on a wiped database
+.venv/Scripts/python scripts/smoke_test.py      # backend: ingest + cluster, real API
+.venv/Scripts/python scripts/smoke_test.py --fresh     # force a re-crawl
+.venv/Scripts/python scripts/ui_smoke.py        # builds every panel, writes screenshots/
+.venv/Scripts/python scripts/sector_smoke.py    # first-run path on a wiped database
+.venv/Scripts/python scripts/watchlist_smoke.py # star, re-identify, diff, persist
+.venv/Scripts/python scripts/edge_case_smoke.py # degenerate inputs (see below)
 ```
+
+`edge_case_smoke.py` covers the shapes that crash rather than the shapes that are
+interesting: a universe of only **unresolved** markets, so every win-rate column
+is entirely missing; a run that finds a **single cluster**, so there is no spread
+to z-score against; and both together. Missing values arrive as pandas NA, whose
+truth value *raises* instead of being falsey, so `not np.isfinite(x)` and
+`x or 0` are both traps rather than the defaults they look like.
 
 The tests run against the live API rather than mocks. Every hard problem here
 came from the API behaving unlike its documentation, and a mock would have

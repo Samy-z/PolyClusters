@@ -92,14 +92,21 @@ def main() -> int:
 
         # Star one row of each kind so the watchlist has something to show.
         cp = win.clusters_panel
-        for table in (cp.clusters_table, cp.members_table, cp.bets_table,
-                      cp.positions_table):
-            if table.proxy.rowCount():
-                table._maybe_toggle_star(table.proxy.index(0, 0))
+        starred = [t for t in (cp.clusters_table, cp.members_table, cp.bets_table,
+                               cp.positions_table) if t.proxy.rowCount()]
+        for table in starred:
+            table._maybe_toggle_star(table.proxy.index(0, 0))
         win.tabs.setCurrentWidget(win.watchlist_panel)
         win.watchlist_panel.reload()
         app.processEvents()
         grab(win, "07_watchlist")
+
+        # Un-star them again. This script shares _smoke.duckdb with the other
+        # smoke tests, and leaving watchlist rows behind makes the next one
+        # start from a state it did not create.
+        for table in starred:
+            table._maybe_toggle_star(table.proxy.index(0, 0))
+        app.processEvents()
 
         win.tabs.setCurrentWidget(win.data_panel)
         app.processEvents()

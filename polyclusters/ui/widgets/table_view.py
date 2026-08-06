@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
@@ -139,7 +140,11 @@ class MetricTable(QWidget):
             self._watch_store.toggle(
                 self._watch_kind, self._watch_ref(row), str(self._watch_label(row))
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a bad row must not take the app down
+            # Report it rather than swallowing: a star that quietly does nothing
+            # is indistinguishable from one that worked, and the click is the
+            # only feedback the user gets.
+            traceback.print_exc()
             return
         self.refresh_watch_column()
         self.watch_toggled.emit()

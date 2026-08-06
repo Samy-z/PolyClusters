@@ -63,6 +63,14 @@ def main() -> int:
     store: WatchlistStore = win.watch
     cp = win.clusters_panel
 
+    # Start from a known-empty watchlist. The source database is shared with the
+    # other smoke tests, and a leftover row would make the first toggle below
+    # remove an item instead of adding one - which fails several steps later,
+    # a long way from the cause.
+    for existing in store.items():
+        store.remove(existing.item_id)
+    assert not store.count_by_kind(), "watchlist did not start empty"
+
     # --- star one of each kind, through the same path a click takes --------
     print("\n2. Starring one row of each kind via the star column...")
     for table, kind in (

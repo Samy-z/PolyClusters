@@ -193,11 +193,19 @@ def build_positions(
     resolved_map = markets.set_index("condition_id")["resolved"]
     positions["winning_outcome"] = positions.condition_id.map(win_map)
     positions["resolved"] = positions.condition_id.map(resolved_map).fillna(False).astype(bool)
-    positions["won"] = np.where(
-        positions.resolved,
-        positions.outcome_index == positions.winning_outcome,
-        np.nan,
+
+    # An unresolved market has no winning outcome, so comparing against it
+    # yields pandas NA and turns `won` into an object column that carries that
+    # NA all the way into the scoring, where its truth value raises. Force the
+    # three real states into float64 instead: 1 won, 0 lost, NaN not yet known.
+    winner = pd.to_numeric(positions.winning_outcome, errors="coerce").to_numpy(
+        dtype="float64", na_value=np.nan
     )
+    outcome = pd.to_numeric(positions.outcome_index, errors="coerce").to_numpy(
+        dtype="float64", na_value=np.nan
+    )
+    decided = positions.resolved.to_numpy(dtype=bool) & np.isfinite(winner)
+    positions["won"] = np.where(decided, (outcome == winner).astype(float), np.nan)
     payout = np.where(positions.won == 1.0, 1.0, 0.0)
     positions["settle_value"] = np.where(
         positions.resolved, positions.net_shares * payout, np.nan
