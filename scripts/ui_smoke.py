@@ -97,9 +97,20 @@ def main() -> int:
         for table in starred:
             table._maybe_toggle_star(table.proxy.index(0, 0))
         win.tabs.setCurrentWidget(win.watchlist_panel)
-        win.watchlist_panel.reload()
+        wp = win.watchlist_panel
+        wp.reload()
         app.processEvents()
-        grab(win, "07_watchlist")
+
+        # One shot per profile kind, since each builds a different set of charts.
+        for name, table in (("07_watchlist_trader", wp.traders_table),
+                            ("09_watchlist_bet", wp.bets_table),
+                            ("10_watchlist_cluster", wp.clusters_table)):
+            wp.tabs.setCurrentWidget(table)
+            table.select_first()
+            app.processEvents()
+            grab(win, name)
+        wp.tabs.setCurrentWidget(wp.traders_table)
+        app.processEvents()
 
         # Un-star them again. This script shares _smoke.duckdb with the other
         # smoke tests, and leaving watchlist rows behind makes the next one

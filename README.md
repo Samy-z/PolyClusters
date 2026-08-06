@@ -233,6 +233,33 @@ of watched markets, then diffs against the previous snapshot and records:
 The first refresh of an item can only record a baseline, so expect no change
 events until the second. Unseen events show as a count on the tab.
 
+### The profile panel
+
+Selecting any watched row opens its profile on the right, built from local data
+so it costs nothing and works offline. Collapse it with `››`, reopen from the
+strip, exactly like the controls panel. What it draws depends on the kind:
+
+**Trader** — a histogram of *stake by entry price*, coloured by how much of the
+money in each band actually won. This separates a favourite-buyer from a
+longshot hunter at a glance, which no single number does. Then cumulative
+realised P&L by entry date, with the largest single win and loss marked and the
+caption saying what share of the total rests on one bet — a staircase is an
+edge, one step is luck. Then the shadowers: who else holds the same bets, as a
+share of this wallet's own book. Plus every position and the raw trade tape.
+
+**Bet** — the volume-weighted traded price over time, rebuilt from actual fills
+rather than a quoted feed, with every buyer plotted at the price and moment they
+got in. Dot size is stake; watched traders are picked out in gold. The table
+below ranks everyone in the market by size.
+
+**Cluster** — who funds it (stake share, flagging when one member carries most
+of it and the "group" is really a whale plus followers), and a member-by-member
+overlap matrix of bets held in common, the diagonal being each member's own
+total.
+
+**Position** — the same price history as the bet, plus how far the entry sat
+above or below the market's own average.
+
 ### What the trader table is for
 
 These signals are computed from local data and do not depend on any run, so they

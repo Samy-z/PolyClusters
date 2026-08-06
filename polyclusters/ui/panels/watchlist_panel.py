@@ -26,8 +26,10 @@ from ...analysis.engine import AnalysisResult
 from ...core.db import Database
 from ...core.watchlist import WatchlistStore, match_cluster, wallet_signals
 from ..models import Col
+from ..widgets.collapse import CollapsedControlsStrip
 from ..widgets.table_view import MetricTable
 from .common import StatRow
+from .watch_detail import WatchDetailPanel
 
 WATCH_STATS = [
     ("clusters", "Clusters", "Watched clusters."),
@@ -132,7 +134,30 @@ class WatchlistPanel(QWidget):
         self.store = store
         self._result: AnalysisResult | None = None
 
-        root = QVBoxLayout(self)
+        # Tables on the left, the profile of whatever is selected on the right.
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.body_splitter = QSplitter(Qt.Horizontal)
+        outer.addWidget(self.body_splitter, 1)
+
+        main = QWidget()
+        self.body_splitter.addWidget(main)
+
+        self.detail = WatchDetailPanel(db, store)
+        self.detail.collapse_button.clicked.connect(self.collapse_detail)
+        self.detail.setMinimumWidth(420)
+        self.body_splitter.addWidget(self.detail)
+        self.body_splitter.setStretchFactor(0, 3)
+        self.body_splitter.setStretchFactor(1, 2)
+
+        self.detail_strip = CollapsedControlsStrip("DETAILS")
+        self.detail_strip.setToolTip("Show the detail panel")
+        self.detail_strip.clicked.connect(self.expand_detail)
+        self.detail_strip.hide()
+        outer.addWidget(self.detail_strip)
+
+        root = QVBoxLayout(main)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
@@ -200,6 +225,37 @@ class WatchlistPanel(QWidget):
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([460, 300])
 
+        # Selecting anywhere opens that item's profile on the right.
+        for table, kind in (
+            (self.traders_table, "member"), (self.bets_table, "bet"),
+            (self.clusters_table, "cluster"), (self.positions_table, "position"),
+        ):
+            table.row_selected.connect(
+                lambda row, k=kind: self.detail.show_item(k, row)
+            )
+        self.tabs.currentChanged.connect(self._sync_detail_to_tab)
+
+    # -- detail panel -------------------------------------------------------
+    def collapse_detail(self) -> None:
+        self.detail.hide()
+        self.detail_strip.show()
+
+    def expand_detail(self) -> None:
+        self.detail_strip.hide()
+        self.detail.show()
+
+    def _sync_detail_to_tab(self, *_a: object) -> None:
+        """Follow the selection of whichever table just came to the front."""
+        table = self.tabs.currentWidget()
+        kinds = {
+            id(self.traders_table): "member", id(self.bets_table): "bet",
+            id(self.clusters_table): "cluster", id(self.positions_table): "position",
+        }
+        kind = kinds.get(id(table))
+        if kind is None:
+            return
+        self.detail.show_item(kind, table.current_row())
+
     # -- population ---------------------------------------------------------
     def set_result(self, result: AnalysisResult) -> None:
         """A fresh run lets watched clusters be re-identified by overlap."""
@@ -228,6 +284,8 @@ class WatchlistPanel(QWidget):
         self.clusters_table.set_dataframe(self._clusters_frame(per_item), CLUSTER_COLUMNS_W)
         self.positions_table.set_dataframe(self._positions_frame(per_item), POSITION_COLUMNS_W)
         self.events_table.set_dataframe(events, EVENT_COLUMNS)
+
+        self._sync_detail_to_tab()
 
         total = sum(counts.values())
         self.status.emit(
