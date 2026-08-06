@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from PySide6.QtGui import QColor
 
+from ..config import ASSETS_DIR
+
+
+def _asset_url(name: str) -> str:
+    """Qt stylesheet url() wants forward slashes, even on Windows."""
+    return (ASSETS_DIR / name).as_posix()
+
+
+ARROW_UP = _asset_url("arrow_up.svg")
+ARROW_DOWN = _asset_url("arrow_down.svg")
+ARROW_UP_DIM = _asset_url("arrow_up_dim.svg")
+ARROW_DOWN_DIM = _asset_url("arrow_down_dim.svg")
+
 BG = "#14161c"
 BG_ALT = "#1a1d25"
 BG_RAISED = "#20242e"
@@ -108,24 +121,26 @@ QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
 QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{
     background: {ACCENT};
 }}
-/* CSS triangles, so no image assets are needed. */
+/* Real images. The CSS-triangle trick (zero size plus coloured borders) does
+   not work here: Qt's stylesheet engine has no triangle synthesis and simply
+   paints the border box, which shows up as a small rectangle. */
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-    width: 0; height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid {FG};
+    image: url({ARROW_UP});
+    width: 9px;
+    height: 6px;
 }}
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-    width: 0; height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {FG};
+    image: url({ARROW_DOWN});
+    width: 9px;
+    height: 6px;
 }}
-QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{
-    border-bottom-color: {FG_DIM};
+QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off,
+QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off {{
+    image: url({ARROW_UP_DIM});
 }}
-QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
-    border-top-color: {FG_DIM};
+QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off,
+QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off {{
+    image: url({ARROW_DOWN_DIM});
 }}
 QComboBox QAbstractItemView {{
     background: {BG_RAISED};

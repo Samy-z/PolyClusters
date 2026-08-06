@@ -61,6 +61,23 @@ parameters, so the crawler walks each market's lifetime in time slices and
 recursively bisects any slice dense enough to hit the ceiling. Coverage is
 recorded per `(market, window)`, so re-running only fetches the gaps.
 
+The crawl runs markets concurrently, fetches pages in a doubling batch, moves
+parsing and database writes to a worker thread, and negotiates **HTTP/2** so
+requests multiplex down one connection. On a fixed 120-market slice that is
+**45.2s → 19.5s**, with byte-identical output.
+
+Two measurement notes, since both are easy to get wrong. Benchmarking HTTP/2 by
+repeating a single URL suggested 22.6 → 57.9 req/s; against *distinct* URLs, as
+a real crawl does, the honest figure is nearer 29 — the server caches, so
+hammering one endpoint measures the cache. And the page ramp deliberately holds
+at one for two rounds: nearly every market fits in a page or two, and
+speculating on those costs a wasted request each while hundreds of markets are
+already running in parallel.
+
+Beyond roughly 25–30 req/s the API stops rewarding concurrency and starts adding
+latency, so the remaining lever is **fewer requests** — `Min market volume` and
+`Min trade USD` cut the crawl proportionally.
+
 Data lands in DuckDB (`%LOCALAPPDATA%\PolyClusters\polyclusters.duckdb` on Windows).
 
 ### 2 · Analyse
@@ -103,7 +120,9 @@ cuts, P&L, edge per share, entry vs market VWAP, earliness, entry spread, sync
 rate, price spread, bet rarity, average pairwise similarity, graph density, stake
 concentration.
 
-**Member** — stake and share of cluster, bets, shared bets, win rate, ROI, P&L,
+**Member** — stake and share of cluster, bets, shared bets, **shared %** (how
+much of the wallet's own activity is spent alongside the cluster — high means
+effectively dedicated to it, low means it merely overlaps), win rate, ROI, P&L,
 **first-mover count and rate**, average entry rank, lead time vs the cluster
 median, **entry price vs the cluster's average and vs the market VWAP**,
 earliness, similarity to the rest of the cluster, biggest-bettor and lead-mover
@@ -144,6 +163,15 @@ sliders re-ranks instantly without re-running the analysis.**
   cluster size, detection method, bet-popularity cap, sync window, core fraction,
   IDF on/off, size weighting.
 
+**Saved setups** store every control on the panel under a name — sector ticks and
+picked markets included, not just the numeric knobs — and reload on later runs.
+They live in the local database, so they are personal to your machine and never
+travel with the repo.
+
+The mouse wheel deliberately does nothing to these fields. The panel is one tall
+scroll area, and a wheel roll aimed at scrolling would otherwise retune whichever
+control sat under the cursor, silently changing a filter you never touched.
+
 ## Views
 
 - **Clusters** — ranked table with heat shading, then per-cluster: members, cluster
@@ -151,11 +179,61 @@ sliders re-ranks instantly without re-running the analysis.**
   member, gold ring = first in, size = stake, colour = entry price), and a
   **network** view (node size = stake, gold = lead mover, green/red = P&L).
 - **Compare** — any subset of clusters as metrics-by-cluster, heat-shaded, with a
-  bar chart for the selected metric.
-- **Data & log** — database contents, ingest coverage per market, run log.
+  bar chart for the selected metric, a **Rank by** metric deciding which clusters
+  make the top N, and a spin box for N.
+- **Watchlist** — see below.
+- **Data & log** — database contents, ingest coverage per market, run log, and a
+  row-limit selector up to unlimited.
 
 Every table has free-text filtering, a right-click column picker, CSV export, and
 context-menu links to the wallet or market on Polymarket.
+
+---
+
+## Watchlist
+
+Click the **★** in the first column of the Clusters, Members, Cluster bets or Raw
+positions table to keep something. The Watchlist tab tracks it from then on.
+
+### Why nothing is keyed to a cluster id
+
+A run is a snapshot of one window under one set of filters; change either and the
+cluster numbering is meaningless. Wallets and `(market, outcome)` pairs are
+permanent, so those are stored directly. A watched **cluster is stored as its
+member set** and re-identified on later runs by Jaccard overlap — which also
+yields the drift: who joined, who left, and how much of the group survived. In
+testing, a cluster starred under one parameter set was found again after a re-run
+that produced 18 clusters instead of 12, at 80% overlap with two members gone.
+
+### Checking for updates
+
+**Check for updates** follows every watched wallet across the whole of Polymarket
+via the user-keyed activity endpoint — including markets your analysis universe
+never covered — pulls metadata for anything new, refreshes the resolution status
+of watched markets, then diffs against the previous snapshot and records:
+
+| Event | Meaning |
+| --- | --- |
+| `new_position` | the wallet entered a bet it did not hold before |
+| `added_to` | it materially increased an existing stake |
+| `exited` | it closed a position it used to hold |
+| `resolved` | a watched market settled, won or lost |
+| `baseline` | first observation; there was nothing to compare against yet |
+
+The first refresh of an item can only record a baseline, so expect no change
+events until the second. Unseen events show as a count on the tab.
+
+### What the trader table is for
+
+These signals are computed from local data and do not depend on any run, so they
+hold still while you change filters: stake, bets, markets, win rate, longshot win
+rate, edge per share, median market volume (do they live in thin markets?), lead
+time, and **Shadow %** — the largest share of this wallet's book that any single
+other wallet also holds. A wallet mirroring most of another's positions is not a
+coincidence, and unlike cluster membership it survives a change of parameters.
+
+Watched clusters additionally show **cohesion**: the share of the group's bets
+held by at least half its members.
 
 ---
 
