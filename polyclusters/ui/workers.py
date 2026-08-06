@@ -253,6 +253,19 @@ class WatchRefreshWorker(_Cancellable):
             if item.kind in ("member", "position"):
                 wallet = item.ref["wallet"]
                 after = observe_wallet(self.db, wallet)
+                if not item.snapshot:
+                    # The first pass has nothing to compare against, so it
+                    # records a baseline rather than announcing every existing
+                    # position as new. Say so, otherwise the first refresh looks
+                    # like it did nothing at all.
+                    self.store.record_event(
+                        item.item_id, "baseline", "info",
+                        f"Now tracking {item.label[:40]} — {len(after['bets'])} open "
+                        f"bet(s), ${after['total_usd']:,.0f} staked. Changes from here "
+                        "will be reported.",
+                        {"bets": len(after["bets"]), "staked": after["total_usd"]},
+                    )
+                    events += 1
                 for kind, severity, summary, detail in diff_wallet(item.snapshot, after):
                     if item.kind == "position" and detail.get("bet_key") != item.ref.get("bet_key"):
                         continue  # a position watch only cares about its own bet
@@ -262,7 +275,16 @@ class WatchRefreshWorker(_Cancellable):
             elif item.kind == "bet":
                 after = observe_bet(self.db, item.ref["bet_key"])
                 before = item.snapshot or {}
-                if after.get("resolved") and not before.get("resolved"):
+                if not before:
+                    self.store.record_event(
+                        item.item_id, "baseline", "info",
+                        f"Now tracking “{after.get('question', '')[:50]}” — "
+                        f"{after.get('traders', 0)} trader(s), "
+                        f"{'resolved' if after.get('resolved') else 'still open'}.",
+                        after,
+                    )
+                    events += 1
+                elif after.get("resolved") and not before.get("resolved"):
                     verdict = "WON" if after.get("won") else "LOST"
                     self.store.record_event(
                         item.item_id, "resolved",

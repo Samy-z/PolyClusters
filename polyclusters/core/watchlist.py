@@ -39,6 +39,51 @@ def _hash(*parts: str) -> str:
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:20]
 
 
+# SQL aggregates go NULL freely - min(...) over a filtered CASE yields NULL for a
+# wallet that only ever sold in a market, and a LEFT JOIN leaves every market
+# column NULL when nothing matched. DuckDB hands those back as pandas NA, whose
+# truth value raises rather than being falsey, so `NA or 0` is a crash and not a
+# default. Every value crossing out of a query goes through these.
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):  # arrays and other non-scalars
+        return False
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    if _is_missing(value):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    if _is_missing(value):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if _is_missing(value):
+        return default
+    try:
+        return bool(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_text(value: Any, default: str = "") -> str:
+    return default if _is_missing(value) else str(value)
+
+
 def make_item_id(kind: str, ref: dict[str, Any]) -> str:
     if kind == "member":
         return f"member:{ref['wallet']}"
@@ -127,7 +172,7 @@ class WatchlistStore:
                 WatchItem(
                     item_id=r.item_id, kind=r.kind, label=r.label,
                     ref=json.loads(r.ref_json or "{}"), note=r.note or "",
-                    added_at=int(r.added_at or 0), last_checked=int(r.last_checked or 0),
+                    added_at=_as_int(r.added_at), last_checked=_as_int(r.last_checked),
                     snapshot=json.loads(r.snapshot_json or "{}"),
                 )
             )
@@ -200,20 +245,24 @@ def observe_wallet(db: Database, wallet: str) -> dict[str, Any]:
     )
     bets: dict[str, Any] = {}
     if not pos.empty:
-        pos["net"] = pos.buy_shares - pos.sell_shares
+        pos["net"] = pos.buy_shares.fillna(0) - pos.sell_shares.fillna(0)
         for r in pos.itertuples():
-            key = f"{r.condition_id}:{int(r.outcome_index)}"
-            bets[key] = {
-                "question": r.question or "",
-                "usd": float(r.buy_usd or 0.0),
-                "net": float(r.net or 0.0),
-                "entry": float(r.buy_usd / r.buy_shares) if r.buy_shares else None,
-                "first_buy_ts": int(r.first_buy_ts or 0),
-                "last_ts": int(r.last_ts or 0),
-                "resolved": bool(r.resolved) if r.resolved is not None else False,
+            outcome_index = _as_int(r.outcome_index)
+            buy_shares = _as_float(r.buy_shares)
+            buy_usd = _as_float(r.buy_usd)
+            resolved = _as_bool(r.resolved)
+            winner = r.winner if not _is_missing(r.winner) else None
+            bets[f"{r.condition_id}:{outcome_index}"] = {
+                "question": _as_text(r.question),
+                "usd": buy_usd,
+                "net": _as_float(r.net),
+                "entry": (buy_usd / buy_shares) if buy_shares > 0 else None,
+                "first_buy_ts": _as_int(r.first_buy_ts),
+                "last_ts": _as_int(r.last_ts),
+                "resolved": resolved,
                 "won": (
-                    None if not r.resolved or r.winner is None
-                    else bool(int(r.outcome_index) == int(r.winner))
+                    None if not resolved or winner is None
+                    else outcome_index == _as_int(winner, -1)
                 ),
             }
     return {"bets": bets, "total_usd": float(sum(b["usd"] for b in bets.values()))}
@@ -237,16 +286,17 @@ def observe_bet(db: Database, bet_key: str) -> dict[str, Any]:
     if row.empty:
         return {}
     r = row.iloc[0]
-    resolved = bool(r.resolved) if r.resolved is not None else False
-    winner = None if r.winner is None or (isinstance(r.winner, float) and np.isnan(r.winner)) else int(r.winner)
+    outcome_index = _as_int(idx)
+    resolved = _as_bool(r.resolved)
+    winner = None if _is_missing(r.winner) else _as_int(r.winner, -1)
     return {
-        "question": r.question or "",
+        "question": _as_text(r.question),
         "resolved": resolved,
-        "won": None if not resolved or winner is None else bool(int(idx or 0) == winner),
-        "traders": int(r.traders or 0),
-        "buy_usd": float(r.buy_usd or 0.0),
-        "volume": float(r.volume or 0.0),
-        "last_ts": int(r.last_ts or 0),
+        "won": None if not resolved or winner is None else outcome_index == winner,
+        "traders": _as_int(r.traders),
+        "buy_usd": _as_float(r.buy_usd),
+        "volume": _as_float(r.volume),
+        "last_ts": _as_int(r.last_ts),
     }
 
 
@@ -300,8 +350,9 @@ def wallet_signals(db: Database, wallet: str, min_usd: float = 100.0) -> dict[st
         "median_hours_before_close": float(
             ((base.mkt_last_ts - base.first_buy_ts) / 3600.0).median()
         ) if base.mkt_last_ts.notna().any() else np.nan,
-        "first_seen": int(base.first_buy_ts.min() or 0),
-        "last_seen": int(base.first_buy_ts.max() or 0),
+        # All-NULL when the wallet only ever sold in every market it touched.
+        "first_seen": _as_int(base.first_buy_ts.min()),
+        "last_seen": _as_int(base.first_buy_ts.max()),
     }
     if len(resolved):
         payout = np.where(won, 1.0, 0.0)
@@ -326,10 +377,11 @@ def wallet_signals(db: Database, wallet: str, min_usd: float = 100.0) -> dict[st
         lut = {}
         if not names.empty:
             for r in names.itertuples():
-                lut[r.proxy_wallet] = (r.name or r.pseudonym or "")
+                lut[r.proxy_wallet] = _as_text(r.name) or _as_text(r.pseudonym)
         out["top_cotraders"] = [
             {"wallet": r.proxy_wallet, "display": lut.get(r.proxy_wallet, "") or r.proxy_wallet[:10],
-             "shared": int(r.shared), "share": float(r.shared) / max(out["n_bets"], 1)}
+             "shared": _as_int(r.shared),
+             "share": _as_float(r.shared) / max(out["n_bets"], 1)}
             for r in co.itertuples()
         ]
         out["top_cotrader_share"] = out["top_cotraders"][0]["share"]
