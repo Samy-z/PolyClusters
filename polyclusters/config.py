@@ -133,6 +133,9 @@ class AppSettings:
     weight_rarity: float = 1.0
     weight_wealth: float = 0.5
 
+    # Panel collapsed to its strip; restored on the next launch.
+    controls_collapsed: bool = False
+
     # Remembered sector picks, so a scoped run stays scoped between sessions.
     selected_tag_ids: list[int] = field(default_factory=list)
 

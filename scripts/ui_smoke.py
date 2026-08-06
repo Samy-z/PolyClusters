@@ -112,6 +112,13 @@ def main() -> int:
         app.processEvents()
         grab(win, "06_data")
 
+        win.tabs.setCurrentWidget(win.clusters_panel)
+        win.collapse_controls()
+        app.processEvents()
+        grab(win, "08_controls_collapsed")
+        win.expand_controls()
+        app.processEvents()
+
         # Exercise the live re-ranking path.
         win.rescore({"weight_roi": 2.0, "weight_winrate": 0.25, "weight_sync": 2.0})
         app.processEvents()

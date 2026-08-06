@@ -256,6 +256,36 @@ QLabel#brandLogo {{ background: transparent; }}
 /* Plain QWidgets inherit the base background, which on the brand strip shows up
    as a dark band between the logo and the Help button. */
 QWidget#brandSpacer {{ background: transparent; }}
+
+QWidget#dockTitle {{
+    background: {BG_RAISED};
+    border-bottom: 1px solid {BORDER};
+}}
+QLabel#dockTitleText {{
+    background: transparent;
+    color: {FG_DIM};
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 1px;
+}}
+QPushButton#dockCollapse {{
+    background: transparent;
+    border: 1px solid {BORDER};
+    border-radius: 3px;
+    color: {FG_DIM};
+    padding: 0;
+    font-size: 11px;
+}}
+QPushButton#dockCollapse:hover {{ color: {FG}; border-color: {ACCENT}; background: {BG_ALT}; }}
+QPushButton#dockCollapse:pressed {{ background: {ACCENT_DIM}; color: #ffffff; }}
+
+QToolBar#controlsStripBar {{
+    background: {BG_RAISED};
+    border: none;
+    padding: 0;
+    spacing: 0;
+}}
 QPushButton#brandHelp {{
     background: transparent;
     border: 1px solid {BORDER};

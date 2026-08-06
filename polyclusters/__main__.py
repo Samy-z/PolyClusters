@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .config import APP_ICO, APP_NAME, AppSettings, LOGO_ICON, WINDOWS_APP_ID
 from .core.db import Database
 from .ui.main_window import MainWindow
+from .ui.single_instance import SingleInstance
 
 
 def _claim_windows_taskbar_identity() -> None:
@@ -30,6 +33,16 @@ def _claim_windows_taskbar_identity() -> None:
         pass
 
 
+def _bring_to_front(window: Any) -> None:
+    """Un-minimise, raise and focus the window a second launch asked for."""
+    window.setWindowState(
+        (window.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+    )
+    window.show()
+    window.raise_()
+    window.activateWindow()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     _claim_windows_taskbar_identity()
@@ -43,6 +56,24 @@ def main(argv: list[str] | None = None) -> int:
     icon_path = APP_ICO if APP_ICO.exists() else LOGO_ICON
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
+
+    # Before anything is opened or locked: if a copy is already running, wake
+    # its window and stop here. Letting the duplicate get as far as the database
+    # only turned a "you already have this open" into a DuckDB IO error.
+    guard = SingleInstance()
+    if not guard.try_acquire():
+        box = QMessageBox(
+            QMessageBox.Information,
+            f"{APP_NAME} is already running",
+            "PolyClusters is already open.\n\n"
+            "Only one copy can run at a time, because it holds the local "
+            "database open for writing. The window you already have has been "
+            "brought to the front.",
+            QMessageBox.Ok,
+        )
+        box.setWindowIcon(QIcon(str(icon_path)) if icon_path.exists() else QIcon())
+        box.exec()
+        return 0
 
     settings = AppSettings.load()
     try:
@@ -65,10 +96,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     window = MainWindow(db, settings)
+    guard.setParent(window)
+    guard.set_activation_handler(lambda: _bring_to_front(window))
     # Maximised on the primary screen. The window's restored geometry is already
     # sized to that monitor, so un-maximising lands somewhere sensible too.
     window.showMaximized()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        guard.release()
 
 
 if __name__ == "__main__":

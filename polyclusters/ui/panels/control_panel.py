@@ -855,6 +855,7 @@ class ControlPanel(QScrollArea):
         s.min_market_volume = float(self.min_market_volume.value())
         s.max_markets_per_fetch = int(self.max_markets.value())
         s.selected_tag_ids = self.selected_tag_ids()
+        # controls_collapsed is owned by the window, not this panel; leave it.
         s.min_user_usd = float(self.min_user_usd.value())
         s.min_user_bets = self.min_user_bets.value()
         s.max_user_bets = self.max_user_bets.value()

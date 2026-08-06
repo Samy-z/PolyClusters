@@ -28,6 +28,7 @@ from .panels.compare_panel import ComparePanel
 from .panels.control_panel import ControlPanel
 from .panels.data_panel import DataPanel
 from .panels.watchlist_panel import WatchlistPanel
+from .widgets.collapse import CollapsedControlsStrip, DockTitleBar
 from .theme import STYLESHEET
 from .workers import (
     AnalysisWorker, IngestWorker, MarketSearchWorker, TagBootstrapWorker,
@@ -56,8 +57,25 @@ class MainWindow(QMainWindow):
         # Pinned in place. Floating it is easy by accident and awkward to undo,
         # since redocking means hitting a narrow drop target on the left edge.
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        title = DockTitleBar("Controls")
+        title.collapse_requested.connect(self.collapse_controls)
+        dock.setTitleBarWidget(title)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
         self.controls_dock = dock
+
+        # The collapsed stand-in. A left toolbar sits outside the dock area, so
+        # the strip lands flush against the window edge where the panel was.
+        self.controls_strip_bar = QToolBar("ControlsStrip", self)
+        self.controls_strip_bar.setObjectName("controlsStripBar")
+        self.controls_strip_bar.setMovable(False)
+        self.controls_strip_bar.setFloatable(False)
+        self.controls_strip_bar.setContextMenuPolicy(Qt.PreventContextMenu)
+        self.controls_strip_bar.toggleViewAction().setVisible(False)
+        strip = CollapsedControlsStrip()
+        strip.clicked.connect(self.expand_controls)
+        self.controls_strip_bar.addWidget(strip)
+        self.addToolBar(Qt.LeftToolBarArea, self.controls_strip_bar)
+        self.controls_strip_bar.hide()
 
         # -- centre ---------------------------------------------------------
         self.tabs = QTabWidget()
@@ -105,6 +123,26 @@ class MainWindow(QMainWindow):
         frame.moveCenter(area.center())
         self.move(frame.topLeft())
 
+    # -- collapsing the controls -------------------------------------------
+    def collapse_controls(self) -> None:
+        self.controls_dock.hide()
+        self.controls_strip_bar.show()
+        self.settings.controls_collapsed = True
+        self.set_status("Controls collapsed — click the strip on the left to reopen.")
+
+    def expand_controls(self) -> None:
+        self.controls_strip_bar.hide()
+        self.controls_dock.show()
+        self.settings.controls_collapsed = False
+        if getattr(self, "_dock_fitted", False):
+            self.resizeDocks([self.controls_dock], [self._dock_width], Qt.Horizontal)
+
+    def toggle_controls(self) -> None:
+        if self.controls_dock.isVisible():
+            self.collapse_controls()
+        else:
+            self.expand_controls()
+
     def _fit_controls_dock(self) -> None:
         """Give the dock the width its contents actually need.
 
@@ -122,6 +160,7 @@ class MainWindow(QMainWindow):
         # Leave headroom so the user can widen it, but not drag it narrower
         # than the content, which is what caused the clipping.
         self.controls_dock.setMaximumWidth(max(width * 2, 640))
+        self._dock_width = width
         self.resizeDocks([self.controls_dock], [width], Qt.Horizontal)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
@@ -130,6 +169,8 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_dock_fitted", False):
             self._dock_fitted = True
             self._fit_controls_dock()
+            if self.settings.controls_collapsed:
+                self.collapse_controls()
 
     # -- branding -----------------------------------------------------------
     def _build_header(self) -> None:
@@ -254,8 +295,10 @@ class MainWindow(QMainWindow):
         act_cancel.setShortcutContext(Qt.ApplicationShortcut)
         act_cancel.triggered.connect(self.cancel_job)
 
-        act_dock = self.controls_dock.toggleViewAction()
-        act_dock.setText("Show controls")
+        act_dock = QAction("Show / hide controls", self)
+        act_dock.setShortcut(QKeySequence("Ctrl+B"))
+        act_dock.setShortcutContext(Qt.ApplicationShortcut)
+        act_dock.triggered.connect(self.toggle_controls)
 
         self.act_help = QAction("How this works", self)
         self.act_help.setShortcut(QKeySequence("F1"))

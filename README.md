@@ -18,6 +18,10 @@ the shortcut. Nothing else to set up.
 
 Requires Python 3.11 or newer on PATH.
 
+Only one copy runs at a time — it holds the local database open for writing, so
+a second launch tells you so and brings the existing window to the front instead
+of starting and then failing.
+
 <details>
 <summary>Manual setup, or moving the project afterwards</summary>
 
@@ -171,6 +175,12 @@ travel with the repo.
 The mouse wheel deliberately does nothing to these fields. The panel is one tall
 scroll area, and a wheel roll aimed at scrolling would otherwise retune whichever
 control sat under the cursor, silently changing a filter you never touched.
+
+Once the data is fetched and the analysis has run, the panel is mostly dead
+weight. **Collapse it** with the `‹‹` button on its title bar or **Ctrl+B**, and
+it becomes a labelled strip down the left edge — 424px back to 30px, which the
+tables put to better use. Click the strip to reopen. The state is remembered
+between launches.
 
 ## Views
 
