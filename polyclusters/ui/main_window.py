@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pandas as pd
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy,
-    QStatusBar, QTabWidget, QToolBar, QWidget,
+    QApplication, QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QSizePolicy, QStatusBar, QSystemTrayIcon, QTabWidget, QToolBar, QWidget,
 )
 
 # Rendered height of the logo strip, in logical pixels.
@@ -30,6 +31,7 @@ from .panels.data_panel import DataPanel
 from .panels.watchlist_panel import WatchlistPanel
 from .widgets.collapse import CollapsedControlsStrip, DockTitleBar
 from .theme import STYLESHEET
+from .tray import TrayController
 from .workers import (
     AnalysisWorker, IngestWorker, MarketSearchWorker, TagBootstrapWorker,
     WatchRefreshWorker,
@@ -43,6 +45,9 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.result: AnalysisResult | None = None
         self._worker: Any = None
+        self._workers: list[tuple[Any, str]] = []
+        self._closing = False
+        self.tray: Any = None
         self.watch = WatchlistStore(db)
 
         self.setWindowTitle("PolyClusters")
@@ -100,6 +105,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._build_header()
         self._apply_icon()
+        self._build_tray()
         self._refresh_db_label()
         self._first_run_hint()
 
@@ -250,6 +256,25 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(APP_ICO)))
         elif LOGO_ICON.exists():
             self.setWindowIcon(QIcon(str(LOGO_ICON)))
+
+    def _build_tray(self) -> None:
+        """Notification-area icon, present for the life of the process."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray = TrayController(self.windowIcon(), self)
+        self.tray.show_requested.connect(self._show_from_tray)
+        self.tray.terminate_requested.connect(self._terminate_from_tray)
+        self.tray.quit_requested.connect(self.close)
+        self.tray.show()
+        self._refresh_tasks()
+
+    def _show_from_tray(self) -> None:
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+        )
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     # -- setup --------------------------------------------------------------
     def _wire(self) -> None:
@@ -421,8 +446,13 @@ class MainWindow(QMainWindow):
         worker.finished_ok.connect(self._on_tags_ready)
         self._tag_worker = worker  # keep a reference alive
         worker.start()
+        self._track(worker, self._job_label(worker))
 
     def _on_tags_ready(self, n: int) -> None:
+        # Cancelling a worker fires its completion signal on the way out; by
+        # then the database is closed and the panels are gone.
+        if self._closing:
+            return
         self.controls.reload_tags()
         self.data_panel.refresh()
         self.set_status(
@@ -471,6 +501,10 @@ class MainWindow(QMainWindow):
         self._start(worker)
 
     def _on_watch_refreshed(self, n_events: int) -> None:
+        # Cancelling a worker fires its completion signal on the way out; by
+        # then the database is closed and the panels are gone.
+        if self._closing:
+            return
         self.watchlist_panel.reload()
         self.data_panel.refresh()
         self._refresh_db_label()
@@ -484,14 +518,89 @@ class MainWindow(QMainWindow):
         worker = MarketSearchWorker(self.settings, term, self)
         worker.results.connect(self.controls.show_market_results)
         worker.failed.connect(self._on_failed)
-        worker.start()
         self._search_worker = worker  # keep a reference alive
+        worker.start()
+        self._track(worker, self._job_label(worker))
 
     def _start(self, worker: Any) -> None:
         self._worker = worker
         self._busy(True)
         worker.finished.connect(lambda: self._busy(False))
         worker.start()
+        self._track(worker, self._job_label(worker))
+
+    # -- background task registry -------------------------------------------
+    @staticmethod
+    def _job_label(worker: Any) -> str:
+        return {
+            "IngestWorker": "fetching data",
+            "AnalysisWorker": "running analysis",
+            "WatchRefreshWorker": "checking the watchlist",
+            "TagBootstrapWorker": "loading sectors",
+            "MarketSearchWorker": "searching markets",
+        }.get(type(worker).__name__, "working")
+
+    def _track(self, worker: Any, label: str) -> None:
+        """Register a worker so shutdown and the tray can see it.
+
+        Every QThread has to be here, not just the foreground job: the sector
+        bootstrap and the market search also hold an HTTP client open, and a
+        thread nobody is tracking is a thread nobody stops.
+        """
+        self._workers.append((worker, label))
+        worker.finished.connect(self._refresh_tasks)
+        self._refresh_tasks()
+
+    def _active_workers(self) -> list[tuple[Any, str]]:
+        """Read-only. Must not drop entries: a worker is registered a moment
+        before start() returns, and pruning on isRunning() would forget it
+        exactly then - leaving the thread untracked for its whole life."""
+        return [(w, label) for w, label in self._workers if w is not None and w.isRunning()]
+
+    def _prune_workers(self) -> None:
+        self._workers = [
+            (w, label) for w, label in self._workers if w is not None and not w.isFinished()
+        ]
+
+    def _refresh_tasks(self) -> None:
+        self._prune_workers()
+        if self.tray is not None:
+            self.tray.set_tasks([label for _w, label in self._active_workers()])
+
+    def terminate_all_tasks(self, grace_ms: int = 4000, force: bool = True) -> int:
+        """Stop every running worker. Returns how many survived.
+
+        Workers check their cancel flag between requests, so this is usually
+        immediate; a request already in flight can take until its timeout, which
+        is why there is a hard stop behind the polite one.
+        """
+        running = self._active_workers()
+        for worker, _label in running:
+            worker.cancel()
+        for worker, _label in running:
+            worker.wait(grace_ms)
+        survivors = self._active_workers()
+        if survivors and force:
+            for worker, _label in survivors:
+                worker.terminate()  # last resort; we are tearing down anyway
+                worker.wait(1500)
+        left = len(self._active_workers())
+        self._refresh_tasks()
+        return left
+
+    def _terminate_from_tray(self) -> None:
+        running = self._active_workers()
+        if not running:
+            return
+        left = self.terminate_all_tasks()
+        message = (
+            f"Stopped {len(running)} task(s)." if not left
+            else f"{left} task(s) would not stop."
+        )
+        self.set_status(message)
+        self.data_panel.append_log(message)
+        if self.tray is not None:
+            self.tray.notify("PolyClusters", message)
 
     def cancel_job(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -500,6 +609,10 @@ class MainWindow(QMainWindow):
 
     # -- completion ---------------------------------------------------------
     def _on_ingest_done(self, report: IngestReport) -> None:
+        # Cancelling a worker fires its completion signal on the way out; by
+        # then the database is closed and the panels are gone.
+        if self._closing:
+            return
         self.data_panel.append_log(report.summary())
         if report.errors:
             for err in report.errors[:20]:
@@ -517,6 +630,10 @@ class MainWindow(QMainWindow):
             )
 
     def _on_analysis_done(self, result: AnalysisResult) -> None:
+        # Cancelling a worker fires its completion signal on the way out; by
+        # then the database is closed and the panels are gone.
+        if self._closing:
+            return
         self.result = result
         self.clusters_panel.set_result(result)
         self.compare_panel.set_result(result)
@@ -539,6 +656,10 @@ class MainWindow(QMainWindow):
             self.set_status("No clusters found — see the log for where it stopped.")
 
     def _on_failed(self, trace: str) -> None:
+        # Cancelling a worker fires its completion signal on the way out; by
+        # then the database is closed and the panels are gone.
+        if self._closing:
+            return
         self.data_panel.append_log("FAILED:\n" + trace)
         self.tabs.setCurrentWidget(self.data_panel)
         self.set_status("Job failed — see the log.")
@@ -587,12 +708,41 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.cancel()
-            self._worker.wait(3000)
+        """Closing the window ends the process, background work included.
+
+        Previously only the foreground job was stopped, so closing during the
+        sector bootstrap or a market search left a QThread alive with an open
+        HTTP client and a database handle - a window that was gone with work
+        that was not.
+        """
+        if self._closing:
+            event.accept()
+            return
+        self._closing = True
+
+        running = self._active_workers()
+        if running:
+            self.set_status(f"Stopping {len(running)} task(s)…")
+            QApplication.processEvents()
+        left = self.terminate_all_tasks()
+
         try:
             self.controls.apply_to_settings().save()
         except OSError:
             pass
-        self.db.close()
+        try:
+            self.db.close()          # only once no worker can still write
+        except Exception:            # noqa: BLE001 - already tearing down
+            pass
+        if self.tray is not None:
+            self.tray.hide()
+
         super().closeEvent(event)
+        event.accept()
+        QApplication.quit()
+
+        if left:
+            # A thread that ignored both cancel and terminate would otherwise
+            # keep the process - and its CPU - alive with no window to show for
+            # it. Nothing here is worth leaving a phantom behind.
+            QTimer.singleShot(1200, lambda: os._exit(0))
