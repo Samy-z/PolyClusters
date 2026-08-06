@@ -90,6 +90,17 @@ def main() -> int:
         app.processEvents()
         grab(win, "05_compare")
 
+        # Star one row of each kind so the watchlist has something to show.
+        cp = win.clusters_panel
+        for table in (cp.clusters_table, cp.members_table, cp.bets_table,
+                      cp.positions_table):
+            if table.proxy.rowCount():
+                table._maybe_toggle_star(table.proxy.index(0, 0))
+        win.tabs.setCurrentWidget(win.watchlist_panel)
+        win.watchlist_panel.reload()
+        app.processEvents()
+        grab(win, "07_watchlist")
+
         win.tabs.setCurrentWidget(win.data_panel)
         app.processEvents()
         grab(win, "06_data")

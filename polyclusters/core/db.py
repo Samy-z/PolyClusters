@@ -96,6 +96,38 @@ CREATE TABLE IF NOT EXISTS price_history (
     PRIMARY KEY (asset, ts)
 );
 
+-- Named snapshots of every control on the left panel.
+CREATE TABLE IF NOT EXISTS presets (
+    name       VARCHAR PRIMARY KEY,
+    created_at BIGINT,
+    updated_at BIGINT,
+    payload_json VARCHAR
+);
+
+-- Starred clusters, traders, bets and positions.
+CREATE TABLE IF NOT EXISTS watchlist (
+    item_id       VARCHAR PRIMARY KEY,
+    kind          VARCHAR,   -- cluster | member | bet | position
+    label         VARCHAR,
+    ref_json      VARCHAR,   -- identity payload: wallets, wallet, or bet key
+    note          VARCHAR,
+    added_at      BIGINT,
+    last_checked  BIGINT,
+    snapshot_json VARCHAR    -- last observed state, for diffing
+);
+
+-- Things that happened to a watched item since it was last checked.
+CREATE TABLE IF NOT EXISTS watch_events (
+    event_id    VARCHAR PRIMARY KEY,
+    item_id     VARCHAR,
+    ts          BIGINT,
+    kind        VARCHAR,   -- new_position | added_to | exited | resolved | drift
+    severity    VARCHAR,   -- info | notable | alert
+    summary     VARCHAR,
+    detail_json VARCHAR,
+    seen        BOOLEAN DEFAULT FALSE
+);
+
 CREATE TABLE IF NOT EXISTS saved_runs (
     run_id      VARCHAR PRIMARY KEY,
     created_at  BIGINT,

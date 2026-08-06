@@ -7,7 +7,8 @@ import pandas as pd
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from ...analysis.engine import AnalysisResult
@@ -41,8 +42,30 @@ class ComparePanel(QWidget):
         self.metric_box.setCurrentIndex(0)
         self.metric_box.currentIndexChanged.connect(self._refresh_chart)
         bar.addWidget(self.metric_box)
-        btn_top = QPushButton("Select top 6")
-        btn_top.clicked.connect(lambda: self._select_top(6))
+
+        bar.addWidget(QLabel("Rank by:"))
+        self.rank_box = QComboBox()
+        for key, label, _fmt in COMPARE_METRICS:
+            self.rank_box.addItem(label, key)
+        self.rank_box.setCurrentIndex(0)
+        self.rank_box.setToolTip(
+            "Which metric decides the top N. Ranking by suspicion answers\n"
+            "'who looks coordinated'; by ROI, 'who actually makes money';\n"
+            "by sync rate, 'who moves together fastest'."
+        )
+        self.rank_box.currentIndexChanged.connect(self._reselect_top)
+        bar.addWidget(self.rank_box)
+
+        bar.addWidget(QLabel("Top"))
+        self.top_n = QSpinBox()
+        self.top_n.setRange(1, 60)
+        self.top_n.setValue(6)
+        self.top_n.setFixedWidth(58)
+        self.top_n.valueChanged.connect(self._reselect_top)
+        bar.addWidget(self.top_n)
+
+        btn_top = QPushButton("Select top")
+        btn_top.clicked.connect(self._reselect_top)
         bar.addWidget(btn_top)
         btn_none = QPushButton("Clear")
         btn_none.clicked.connect(self._select_none)
@@ -94,7 +117,7 @@ class ComparePanel(QWidget):
                 item.setData(Qt.UserRole, int(row.cluster_id))
                 self.picker.addItem(item)
         self.picker.blockSignals(False)
-        self._select_top(6)
+        self._reselect_top()
 
     def _selected_ids(self) -> list[int]:
         return [
@@ -103,10 +126,32 @@ class ComparePanel(QWidget):
             if self.picker.item(i).checkState() == Qt.Checked
         ]
 
+    def _reselect_top(self, *_a: object) -> None:
+        self._select_top(self.top_n.value())
+
     def _select_top(self, n: int) -> None:
+        """Tick the top N clusters by whichever metric 'Rank by' names.
+
+        The picker is ordered by suspicion, so ranking on anything else means
+        resolving the winners by cluster id rather than by list position.
+        """
+        winners: set[int] = set()
+        key = self.rank_box.currentData()
+        if self._result is not None and not self._result.clusters.empty:
+            df = self._result.clusters
+            if key in df.columns:
+                ranked = df[["cluster_id", key]].copy()
+                ranked[key] = pd.to_numeric(ranked[key], errors="coerce")
+                ranked = ranked.dropna(subset=[key]).nlargest(n, key)
+                winners = {int(c) for c in ranked.cluster_id}
+            if not winners:  # metric absent or all-NaN: fall back to list order
+                winners = {int(c) for c in df.cluster_id.head(n)}
+
         self.picker.blockSignals(True)
         for i in range(self.picker.count()):
-            self.picker.item(i).setCheckState(Qt.Checked if i < n else Qt.Unchecked)
+            item = self.picker.item(i)
+            cid = int(item.data(Qt.UserRole))
+            item.setCheckState(Qt.Checked if cid in winners else Qt.Unchecked)
         self.picker.blockSignals(False)
         self._refresh()
 

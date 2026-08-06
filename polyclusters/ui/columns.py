@@ -108,6 +108,10 @@ MEMBER_COLUMNS: list[Col] = [
     Col("n_bets", "Bets", "int", 56),
     Col("n_shared_bets", "Shared", "int", 66,
         tip="Shared bets this wallet participated in."),
+    Col("shared_pct", "Shared %", "pct", 76, heat=True,
+        tip="Shared bets as a share of this wallet's own bets.\n"
+            "High = the wallet is effectively dedicated to the cluster;\n"
+            "low = it overlaps while mostly trading its own book."),
     Col("n_markets", "Markets", "int", 68),
     Col("n_trades", "Trades", "int", 64),
     Col("avg_usd", "Avg bet", "usd", 78),
@@ -189,7 +193,9 @@ BET_COLUMNS: list[Col] = [
 # Per-member rows inside one bet (the drill-down under a cluster's position).
 POSITION_COLUMNS: list[Col] = [
     Col("proxy_wallet", "Wallet", "wallet", 120),
-    Col("question", "Market", "text", 280),
+    Col("display", "Trader", "text", 150,
+        tip="Polymarket display name, else pseudonym, else wallet."),
+    Col("question", "Market", "text", 300),
     Col("outcome", "Side", "text", 62),
     Col("buy_usd", "Staked", "usd", 86, heat=True),
     Col("buy_shares", "Shares", "num", 88),

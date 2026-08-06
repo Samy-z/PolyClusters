@@ -6,8 +6,8 @@ import pandas as pd
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 from PySide6.QtCore import Qt
 
@@ -50,6 +50,19 @@ class DataPanel(QWidget):
         header.addWidget(self.path_label)
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh)
+        header.addWidget(QLabel("Rows:"))
+        self.row_limit = QComboBox()
+        # 0 means no LIMIT clause at all.
+        for label, value in (("1,000", 1_000), ("5,000", 5_000), ("25,000", 25_000),
+                             ("100,000", 100_000), ("All", 0)):
+            self.row_limit.addItem(label, value)
+        self.row_limit.setCurrentIndex(1)
+        self.row_limit.setToolTip(
+            "How many rows to load into the tables below.\n"
+            "'All' can be slow once the database holds millions of trades."
+        )
+        self.row_limit.currentIndexChanged.connect(self.refresh)
+        header.addWidget(self.row_limit)
         header.addWidget(refresh)
         purge = QPushButton("Clear trades")
         purge.setObjectName("danger")
@@ -121,18 +134,21 @@ class DataPanel(QWidget):
         self.stats.set("usd_volume", stats["usd_volume"], "usd")
         self.stats.set("tags", stats["tags"], "int")
 
+        limit = int(self.row_limit.currentData() or 0)
+        clause = f"LIMIT {limit}" if limit else ""
+
         markets = self.db.query(
-            """
+            f"""
             SELECT m.*,
                    (SELECT string_agg(DISTINCT mt.tag_label, ', ')
                       FROM market_tags mt WHERE mt.condition_id = m.condition_id) AS sectors
-            FROM markets m ORDER BY m.volume DESC LIMIT 5000
+            FROM markets m ORDER BY m.volume DESC {clause}
             """
         )
         self.markets_table.set_dataframe(markets, MARKET_COLUMNS)
 
         coverage = self.db.query(
-            """
+            f"""
             SELECT m.question, l.condition_id,
                    count(*) AS windows,
                    sum(l.n_trades) AS trades_fetched,
@@ -141,7 +157,7 @@ class DataPanel(QWidget):
                    max(l.fetched_at) AS last_fetch
             FROM ingest_log l LEFT JOIN markets m USING (condition_id)
             GROUP BY m.question, l.condition_id
-            ORDER BY trades_fetched DESC LIMIT 5000
+            ORDER BY trades_fetched DESC {clause}
             """
         )
         from ..models import Col

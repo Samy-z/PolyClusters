@@ -11,7 +11,7 @@ import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
-from .theme import BAD, FG, FG_DIM, GOOD, heat_color
+from .theme import BAD, FG, FG_DIM, GOOD, WARN, heat_color
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,8 @@ def fmt_value(value: Any, fmt: str) -> str:
         if fmt == "wallet":
             s = str(value)
             return f"{s[:6]}…{s[-4:]}" if len(s) > 14 else s
+        if fmt == "star":
+            return "★" if value else "☆"  # filled vs hollow star
     except (TypeError, ValueError):
         return str(value)
     # auto / text
@@ -147,8 +149,12 @@ class DataFrameModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             return fmt_value(value, spec.fmt)
         if role == Qt.ToolTipRole:
+            if spec.fmt == "star":
+                return "Click to add or remove this row from the watchlist"
             return f"{spec.title}: {value}" + (f"\n{spec.tip}" if spec.tip else "")
         if role == Qt.TextAlignmentRole:
+            if spec.fmt == "star":
+                return int(Qt.AlignCenter)
             numeric = spec.fmt in ("usd", "pct", "ratio", "num", "int", "hours")
             return int(Qt.AlignVCenter | (Qt.AlignRight if numeric else Qt.AlignLeft))
         if role == Qt.BackgroundRole:
@@ -159,6 +165,8 @@ class DataFrameModel(QAbstractTableModel):
                     return heat_color(float(r))
             return None
         if role == Qt.ForegroundRole:
+            if spec.fmt == "star":
+                return QColor(WARN) if value else QColor(FG_DIM)
             if spec.fmt in ("pct", "ratio", "num", "usd") and isinstance(
                 value, (int, float, np.integer, np.floating)
             ) and np.isfinite(value) and not spec.heat:

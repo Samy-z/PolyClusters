@@ -6,12 +6,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QDate, Qt, Signal
+import json
+import time
+
+from PySide6.QtCore import QDate, QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDateEdit, QDoubleSpinBox, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-    QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QCheckBox, QComboBox, QDateEdit, QDoubleSpinBox, QFormLayout,
+    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QVBoxLayout,
+    QWidget,
 )
 
 from ...analysis.cluster import ClusterParams
@@ -32,6 +36,21 @@ PRESETS: list[tuple[str, int | None]] = [
     ("Everything ingested", None),
     ("Custom range…", -1),
 ]
+
+
+class WheelBlocker(QObject):
+    """Swallows wheel events on value widgets.
+
+    The whole panel is one tall scroll area, so a wheel roll aimed at scrolling
+    would silently retune whichever spin box or combo happened to be under the
+    cursor. Blocking the event lets the scroll pass through to the panel.
+    """
+
+    def eventFilter(self, obj: QObject, event: Any) -> bool:  # noqa: N802
+        if event.type() == QEvent.Wheel:
+            event.ignore()
+            return True
+        return super().eventFilter(obj, event)
 
 
 def _utc_ts(qdate: QDate, end_of_day: bool = False) -> int:
@@ -65,6 +84,7 @@ class ControlPanel(QScrollArea):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
+        root.addWidget(self._build_preset_group())
         root.addWidget(self._build_window_group())
         root.addWidget(self._build_sector_group())
         root.addWidget(self._build_market_group())
@@ -76,6 +96,195 @@ class ControlPanel(QScrollArea):
 
         self._on_preset_changed()
         self.reload_tags()
+        self._block_wheel()
+        self.reload_presets()
+
+    def _block_wheel(self) -> None:
+        """Stop the wheel from editing values anywhere in the panel."""
+        self._wheel_blocker = WheelBlocker(self)
+        for kind in (QAbstractSpinBox, QComboBox, QDateEdit):
+            for widget in self.findChildren(kind):
+                widget.installEventFilter(self._wheel_blocker)
+                # Without this a widget can still take focus by hover-scroll on
+                # some styles; StrongFocus means click or tab only.
+                widget.setFocusPolicy(Qt.StrongFocus)
+
+    # -- presets ------------------------------------------------------------
+    def _build_preset_group(self) -> QGroupBox:
+        box = QGroupBox("Saved setups")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(5)
+
+        self.preset_box = QComboBox()
+        self.preset_box.setToolTip(
+            "Every control on this panel, saved under a name and reloaded on "
+            "later runs."
+        )
+        self.preset_box.activated.connect(self._apply_selected_preset)
+        lay.addWidget(self.preset_box)
+
+        row = QHBoxLayout()
+        save = QPushButton("Save…")
+        save.setToolTip("Store the current controls under a name.")
+        save.clicked.connect(self.save_preset)
+        row.addWidget(save)
+        update = QPushButton("Update")
+        update.setToolTip("Overwrite the selected setup with the current controls.")
+        update.clicked.connect(self.update_preset)
+        row.addWidget(update)
+        delete = QPushButton("Delete")
+        delete.setObjectName("danger")
+        delete.clicked.connect(self.delete_preset)
+        row.addWidget(delete)
+        lay.addLayout(row)
+        return box
+
+    def reload_presets(self, select: str | None = None) -> None:
+        try:
+            df = self.db.query("SELECT name FROM presets ORDER BY name")
+        except Exception:  # noqa: BLE001
+            df = pd.DataFrame()
+        self.preset_box.blockSignals(True)
+        self.preset_box.clear()
+        self.preset_box.addItem("— current (unsaved) —", "")
+        for row in df.itertuples():
+            self.preset_box.addItem(row.name, row.name)
+        if select:
+            idx = self.preset_box.findData(select)
+            if idx >= 0:
+                self.preset_box.setCurrentIndex(idx)
+        self.preset_box.blockSignals(False)
+
+    def save_preset(self) -> None:
+        name, ok = QInputDialog.getText(self, "Save setup", "Name for this setup:")
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        existing = self.db.scalar("SELECT count(*) FROM presets WHERE name = ?", [name])
+        if existing and QMessageBox.question(
+            self, "Overwrite?", f"“{name}” already exists. Replace it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self._write_preset(name)
+        self.reload_presets(select=name)
+
+    def update_preset(self) -> None:
+        name = self.preset_box.currentData()
+        if not name:
+            self.save_preset()
+            return
+        self._write_preset(name)
+        self.reload_presets(select=name)
+
+    def _write_preset(self, name: str) -> None:
+        now = int(time.time())
+        self.db.execute(
+            "INSERT INTO presets (name, created_at, updated_at, payload_json) "
+            "VALUES (?,?,?,?) ON CONFLICT (name) DO UPDATE SET "
+            "updated_at = excluded.updated_at, payload_json = excluded.payload_json",
+            [name, now, now, json.dumps(self.export_state())],
+        )
+
+    def delete_preset(self) -> None:
+        name = self.preset_box.currentData()
+        if not name:
+            return
+        if QMessageBox.question(
+            self, "Delete setup", f"Delete “{name}”?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self.db.execute("DELETE FROM presets WHERE name = ?", [name])
+        self.reload_presets()
+
+    def _apply_selected_preset(self, *_a: Any) -> None:
+        name = self.preset_box.currentData()
+        if not name:
+            return
+        raw = self.db.scalar("SELECT payload_json FROM presets WHERE name = ?", [name])
+        if raw:
+            self.apply_state(json.loads(raw))
+
+    # -- state serialisation -------------------------------------------------
+    def export_state(self) -> dict[str, Any]:
+        """Every control on the panel, as plain JSON-able values."""
+        state: dict[str, Any] = {
+            "preset_index": self.preset.currentIndex(),
+            "date_from": self.date_from.date().toString("yyyy-MM-dd"),
+            "date_to": self.date_to.date().toString("yyyy-MM-dd"),
+            "tag_ids": self.selected_tag_ids(),
+            "markets": dict(self._selected_markets),
+            "market_mode": self.market_mode.currentData(),
+            "resolved_only": self.resolved_only.isChecked(),
+            "method": self.method.currentText(),
+            "size_weighting": self.size_weighting.currentText(),
+            "use_idf": self.use_idf.isChecked(),
+            "timing_bonus": self.timing_bonus.isChecked(),
+            "weights": {k: w.value() for k, w in self.weight_widgets.items()},
+        }
+        for name in ("min_market_volume", "max_markets", "min_user_usd", "min_user_bets",
+                     "max_user_bets", "min_position_usd", "min_entry_price",
+                     "max_entry_price", "min_shared", "similarity", "resolution",
+                     "min_cluster_size", "max_bet_frac", "timing_window", "core_pct"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                state[name] = widget.value()
+        return state
+
+    def apply_state(self, state: dict[str, Any]) -> None:
+        if not state:
+            return
+        for name in ("min_market_volume", "max_markets", "min_user_usd", "min_user_bets",
+                     "max_user_bets", "min_position_usd", "min_entry_price",
+                     "max_entry_price", "min_shared", "similarity", "resolution",
+                     "min_cluster_size", "max_bet_frac", "timing_window", "core_pct"):
+            widget = getattr(self, name, None)
+            if widget is not None and name in state:
+                widget.setValue(type(widget.value())(state[name]))
+
+        if "preset_index" in state:
+            self.preset.setCurrentIndex(int(state["preset_index"]))
+            self._on_preset_changed()
+        for key, edit in (("date_from", self.date_from), ("date_to", self.date_to)):
+            if state.get(key):
+                edit.setDate(QDate.fromString(state[key], "yyyy-MM-dd"))
+
+        self.resolved_only.setChecked(bool(state.get("resolved_only", False)))
+        self.use_idf.setChecked(bool(state.get("use_idf", True)))
+        self.timing_bonus.setChecked(bool(state.get("timing_bonus", True)))
+        for combo, key in ((self.method, "method"), (self.size_weighting, "size_weighting")):
+            if state.get(key):
+                idx = combo.findText(state[key])
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+        if state.get("market_mode"):
+            idx = self.market_mode.findData(state["market_mode"])
+            if idx >= 0:
+                self.market_mode.setCurrentIndex(idx)
+
+        for attr, value in (state.get("weights") or {}).items():
+            if attr in self.weight_widgets:
+                self.weight_widgets[attr].setValue(float(value))
+
+        self._selected_markets = dict(state.get("markets") or {})
+        self.market_selected.clear()
+        for cid, question in self._selected_markets.items():
+            entry = QListWidgetItem(str(question)[:80])
+            entry.setData(Qt.UserRole, cid)
+            self.market_selected.addItem(entry)
+
+        wanted = set(state.get("tag_ids") or [])
+        self.tag_list.blockSignals(True)
+        for i in range(self.tag_list.count()):
+            item = self.tag_list.item(i)
+            if self._is_selectable(item):
+                item.setCheckState(
+                    Qt.Checked if int(item.data(Qt.UserRole)) in wanted else Qt.Unchecked
+                )
+        self.tag_list.blockSignals(False)
+        self._update_tag_count()
+        self._emit_weights()
 
     # -- groups -------------------------------------------------------------
     def _build_window_group(self) -> QGroupBox:

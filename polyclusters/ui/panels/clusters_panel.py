@@ -39,11 +39,13 @@ class ClustersPanel(QWidget):
     """Top-level view over a completed analysis run."""
 
     status = Signal(str)
+    watch_changed = Signal()
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, store: Any = None, parent: QWidget | None = None):
         super().__init__(parent)
         self._result: AnalysisResult | None = None
         self._cluster_id: int | None = None
+        self.store = store
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -96,6 +98,54 @@ class ClustersPanel(QWidget):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 4)
         splitter.setSizes([340, 460])
+
+        if self.store is not None:
+            self._enable_stars()
+
+    def _enable_stars(self) -> None:
+        """Bind a star column on each table to a stable watchlist identity.
+
+        Cluster numbers are per-run, so a watched cluster is stored as its
+        member set; wallets and bet keys are already stable.
+        """
+        self.clusters_table.enable_watching(
+            self.store, "cluster",
+            lambda r: {"wallets": self._wallets_of(int(r.cluster_id))},
+            lambda r: (
+                f"Cluster {int(r.cluster_id)} · {int(r.get('n_members', 0))} wallets"
+                f" · susp {r.get('suspicion_score', float('nan')):.2f}"
+            ),
+        )
+        self.members_table.enable_watching(
+            self.store, "member",
+            lambda r: {"wallet": str(r.proxy_wallet)},
+            lambda r: str(r.get("display") or r.proxy_wallet),
+        )
+        self.bets_table.enable_watching(
+            self.store, "bet",
+            lambda r: {"bet_key": str(r.bet_key)},
+            lambda r: f"{str(r.get('question', ''))[:70]} · {r.get('outcome', '')}",
+        )
+        self.positions_table.enable_watching(
+            self.store, "position",
+            lambda r: {"wallet": str(r.proxy_wallet), "bet_key": str(r.bet_key)},
+            lambda r: (
+                f"{str(r.get('display') or r.proxy_wallet)[:24]} in "
+                f"{str(r.get('question', ''))[:50]}"
+            ),
+        )
+        for table in (self.clusters_table, self.members_table,
+                      self.bets_table, self.positions_table):
+            table.watch_toggled.connect(self.watch_changed.emit)
+
+    def _wallets_of(self, cluster_id: int) -> list[str]:
+        members = self._result.cluster_members(cluster_id) if self._result else None
+        return sorted(members.proxy_wallet) if members is not None and not members.empty else []
+
+    def refresh_stars(self) -> None:
+        for table in (self.clusters_table, self.members_table,
+                      self.bets_table, self.positions_table):
+            table.refresh_watch_column()
 
     # -- population ---------------------------------------------------------
     def set_result(self, result: AnalysisResult) -> None:

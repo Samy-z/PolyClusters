@@ -75,6 +75,58 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QDateEdi
     border: 1px solid {ACCENT};
 }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
+
+/* Spin buttons are styled explicitly so up and down are visibly distinct and
+   comfortably clickable; the default sub-controls are cramped once the field
+   itself carries padding. */
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 20px;
+    height: 13px;
+    margin: 1px 1px 0 0;
+    border: 1px solid {BORDER};
+    border-top-right-radius: 3px;
+    background: {BG_RAISED};
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 20px;
+    height: 13px;
+    margin: 0 1px 1px 0;
+    border: 1px solid {BORDER};
+    border-bottom-right-radius: 3px;
+    background: {BG_RAISED};
+}}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+    background: {ACCENT_DIM};
+    border-color: {ACCENT};
+}}
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{
+    background: {ACCENT};
+}}
+/* CSS triangles, so no image assets are needed. */
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid {FG};
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {FG};
+}}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{
+    border-bottom-color: {FG_DIM};
+}}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+    border-top-color: {FG_DIM};
+}}
 QComboBox QAbstractItemView {{
     background: {BG_RAISED};
     border: 1px solid {BORDER};

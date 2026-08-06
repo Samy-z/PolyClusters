@@ -21,6 +21,11 @@ class MetricTable(QWidget):
 
     row_selected = Signal(object)      # pd.Series or None
     row_activated = Signal(object)     # double-click
+    watch_toggled = Signal()           # a star was clicked
+
+    #: Column injected at position 0 when the table supports starring.
+    STAR_COL = Col("_watched", "★", "star", 30,
+                   tip="Click to add or remove this row from the watchlist")
 
     def __init__(
         self,
@@ -33,6 +38,10 @@ class MetricTable(QWidget):
         super().__init__(parent)
         self._columns = columns
         self._all_columns = list(columns)
+        self._watch_store: Any = None
+        self._watch_kind: str = ""
+        self._watch_ref: Any = None
+        self._watch_label: Any = None
 
         self.model = DataFrameModel(columns, self)
         self.proxy = SortProxy(self)
@@ -90,12 +99,67 @@ class MetricTable(QWidget):
         copy.triggered.connect(self.copy_selection)
         self.addAction(copy)
 
+    # -- watchlist ----------------------------------------------------------
+    def enable_watching(self, store: Any, kind: str, ref_fn: Any, label_fn: Any) -> None:
+        """Prepend a star column bound to ``store``.
+
+        ``ref_fn(row)`` returns the identity dict for the watchlist, and
+        ``label_fn(row)`` the human-readable name shown there.
+        """
+        self._watch_store = store
+        self._watch_kind = kind
+        self._watch_ref = ref_fn
+        self._watch_label = label_fn
+        if not self._columns or self._columns[0].key != self.STAR_COL.key:
+            self._columns = [self.STAR_COL] + list(self._columns)
+            self._all_columns = [self.STAR_COL] + list(self._all_columns)
+        self.table.clicked.connect(self._maybe_toggle_star)
+
+    def _annotate_watched(self, df: pd.DataFrame) -> pd.DataFrame:
+        if self._watch_store is None or df is None or df.empty:
+            return df
+        df = df.copy()
+        try:
+            df["_watched"] = [
+                self._watch_store.is_watched(self._watch_kind, self._watch_ref(r))
+                for r in df.itertuples()
+            ]
+        except Exception:  # noqa: BLE001 - a bad ref must not break the table
+            df["_watched"] = False
+        return df
+
+    def _maybe_toggle_star(self, index: Any) -> None:
+        spec = self.model.column_spec(index.column())
+        if spec is None or spec.fmt != "star" or self._watch_store is None:
+            return
+        row = self.model.row_record(self.proxy.mapToSource(index).row())
+        if row is None:
+            return
+        try:
+            self._watch_store.toggle(
+                self._watch_kind, self._watch_ref(row), str(self._watch_label(row))
+            )
+        except Exception:  # noqa: BLE001
+            return
+        self.refresh_watch_column()
+        self.watch_toggled.emit()
+
+    def refresh_watch_column(self) -> None:
+        if self._watch_store is None or self.model.dataframe.empty:
+            return
+        self.model.set_dataframe(
+            self._annotate_watched(self.model.dataframe), self._columns
+        )
+        self._apply_widths()
+
     # -- data ---------------------------------------------------------------
     def set_dataframe(self, df: pd.DataFrame, columns: list[Col] | None = None) -> None:
         if columns is not None:
-            self._columns = columns
-            self._all_columns = list(columns)
-        self.model.set_dataframe(df if df is not None else pd.DataFrame(), self._columns)
+            star = self._columns[0] if self._columns and self._columns[0].key == self.STAR_COL.key else None
+            self._columns = ([star] if star else []) + list(columns)
+            self._all_columns = list(self._columns)
+        df = self._annotate_watched(df if df is not None else pd.DataFrame())
+        self.model.set_dataframe(df, self._columns)
         self._apply_widths()
         if self.count_label is not None:
             self.count_label.setText(f"{len(self.model.dataframe):,} rows")

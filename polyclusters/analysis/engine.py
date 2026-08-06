@@ -140,11 +140,23 @@ def run_analysis(
 
     say("Computing cluster, member and bet metrics...")
     cp = attach_clusters(ps, membership)
-    result.positions = cp
     bets = bet_metrics(cp, ps, sg, params)
     result.bets = bets
     db_users = db.query("SELECT proxy_wallet, name, pseudonym FROM users")
     members = member_metrics(cp, bets, edges, db_users)
+
+    # Raw positions are read row by row, so carry the human labels rather than
+    # making the reader resolve a wallet hash and a condition id by eye.
+    meta = ps.markets.set_index("condition_id")
+    cp["question"] = cp.condition_id.map(meta["question"])
+    cp["event_title"] = cp.condition_id.map(meta["event_title"])
+    if not members.empty:
+        cp["display"] = cp.proxy_wallet.map(
+            members.drop_duplicates("proxy_wallet").set_index("proxy_wallet")["display"]
+        )
+    else:
+        cp["display"] = cp.proxy_wallet.str[:10]
+    result.positions = cp
     result.members = members
     result.clusters = cluster_metrics(cp, bets, members, edges, ps, params)
 

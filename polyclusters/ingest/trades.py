@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from ..config import TRADES_MAX_LIMIT, TRADES_MAX_OFFSET
+from ..config import ACTIVITY_MAX_OFFSET, TRADES_MAX_LIMIT, TRADES_MAX_OFFSET
 from .client import DataApiLimit, PolymarketClient
 
 ProgressFn = Callable[[str], None]
@@ -180,6 +180,54 @@ class TradeCrawler:
         left = await self.crawl_market(condition_id, start, mid, depth + 1)
         right = await self.crawl_market(condition_id, mid + 1, end, depth + 1)
         return left + right
+
+
+async def fetch_user_activity(
+    client: PolymarketClient,
+    wallet: str,
+    start: int,
+    end: int,
+    *,
+    cancelled: CancelFn | None = None,
+) -> list[dict[str, Any]]:
+    """Every trade one wallet made in a window, across all markets.
+
+    Watching a wallet means following it everywhere, including markets outside
+    the analysis universe, which the market-keyed crawler never visits. The
+    ``/activity`` endpoint is user-keyed and caps offset at 5,000, so the window
+    is halved whenever that ceiling is reached - the same trick the market
+    crawler uses against its own 10,000 cap.
+    """
+    cancelled = cancelled or (lambda: False)
+    out: list[dict[str, Any]] = []
+    stack: list[tuple[int, int]] = [(start, max(start, end))]
+
+    while stack:
+        if cancelled():
+            break
+        lo, hi = stack.pop()
+        offset, ceiling_hit = 0, False
+        while offset <= ACTIVITY_MAX_OFFSET:
+            try:
+                batch = await client.data(
+                    "/activity", user=wallet, limit=TRADES_MAX_LIMIT, offset=offset,
+                    type="TRADE", start=lo, end=hi, sortDirection="ASC",
+                )
+            except DataApiLimit:
+                ceiling_hit = True
+                break
+            if not isinstance(batch, list) or not batch:
+                break
+            out.extend(batch)
+            if len(batch) < TRADES_MAX_LIMIT:
+                break
+            offset += TRADES_MAX_LIMIT
+        else:
+            ceiling_hit = True
+        if ceiling_hit and hi - lo >= MIN_SLICE_SECONDS:
+            mid = lo + (hi - lo) // 2
+            stack.extend([(lo, mid), (mid + 1, hi)])
+    return out
 
 
 def market_window(

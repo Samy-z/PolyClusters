@@ -190,9 +190,14 @@ def member_metrics(
         ).reset_index()
         lead["first_mover_rate"] = _safe_div(lead.first_mover_count, lead.n_shared_bets)
         base = base.merge(lead, on=["cluster_id", "proxy_wallet"], how="left")
+        # How much of this wallet's activity is spent alongside the cluster.
+        # A wallet at 90% is effectively dedicated to the group; one at 10%
+        # happens to overlap while mostly trading its own book.
+        base["shared_pct"] = _safe_div(base.n_shared_bets, base.n_bets)
     else:
         for col in ("n_shared_bets", "first_mover_count", "avg_entry_rank", "avg_lead_time_h",
-                    "median_lead_time_h", "avg_entry_vs_cluster", "shared_usd", "first_mover_rate"):
+                    "median_lead_time_h", "avg_entry_vs_cluster", "shared_usd",
+                    "first_mover_rate", "shared_pct"):
             base[col] = np.nan
 
     # --- how tightly each wallet sits inside its own cluster ---------------

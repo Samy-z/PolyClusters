@@ -21,13 +21,18 @@ from ..config import (
     APP_ICO, AnalysisFilters, AppSettings, LOGO_DISPLAY, LOGO_DISPLAY_DARK, LOGO_ICON,
 )
 from ..core.db import Database
+from ..core.watchlist import WatchlistStore
 from ..ingest.pipeline import IngestReport
 from .panels.clusters_panel import ClustersPanel
 from .panels.compare_panel import ComparePanel
 from .panels.control_panel import ControlPanel
 from .panels.data_panel import DataPanel
+from .panels.watchlist_panel import WatchlistPanel
 from .theme import STYLESHEET
-from .workers import AnalysisWorker, IngestWorker, MarketSearchWorker, TagBootstrapWorker
+from .workers import (
+    AnalysisWorker, IngestWorker, MarketSearchWorker, TagBootstrapWorker,
+    WatchRefreshWorker,
+)
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +42,7 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.result: AnalysisResult | None = None
         self._worker: Any = None
+        self.watch = WatchlistStore(db)
 
         self.setWindowTitle("PolyClusters")
         self.setStyleSheet(STYLESHEET)
@@ -55,11 +61,13 @@ class MainWindow(QMainWindow):
 
         # -- centre ---------------------------------------------------------
         self.tabs = QTabWidget()
-        self.clusters_panel = ClustersPanel()
+        self.clusters_panel = ClustersPanel(self.watch)
         self.compare_panel = ComparePanel()
         self.data_panel = DataPanel(db)
+        self.watchlist_panel = WatchlistPanel(db, self.watch)
         self.tabs.addTab(self.clusters_panel, "Clusters")
         self.tabs.addTab(self.compare_panel, "Compare")
+        self.tabs.addTab(self.watchlist_panel, "Watchlist")
         self.tabs.addTab(self.data_panel, "Data && log")
         self.setCentralWidget(self.tabs)
 
@@ -194,6 +202,10 @@ class MainWindow(QMainWindow):
         self.controls.market_search_requested.connect(self.search_markets)
         self.controls.weights_changed.connect(self.rescore)
         self.clusters_panel.status.connect(self.set_status)
+        self.clusters_panel.watch_changed.connect(self.watchlist_panel.reload)
+        self.watchlist_panel.status.connect(self.set_status)
+        self.watchlist_panel.refresh_requested.connect(self.start_watch_refresh)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _build_menu(self) -> None:
         run_menu = self.menuBar().addMenu("&Run")
@@ -349,6 +361,57 @@ class MainWindow(QMainWindow):
             f"{n:,} sectors loaded — tick the ones you want, then fetch (Ctrl+D)."
         )
 
+    def _on_tab_changed(self, _index: int) -> None:
+        """Opening the Watchlist rebuilds it and clears the unseen badge."""
+        if self.tabs.currentWidget() is self.watchlist_panel:
+            self.watchlist_panel.reload()
+            QTimer.singleShot(1500, self.watchlist_panel.mark_seen)
+        self._refresh_watch_badge()
+
+    def _refresh_watch_badge(self) -> None:
+        idx = self.tabs.indexOf(self.watchlist_panel)
+        if idx < 0:
+            return
+        unseen = self.watch.unseen_count()
+        total = sum(self.watch.count_by_kind().values())
+        label = "Watchlist"
+        if unseen:
+            label += f"  ({unseen} new)"
+        elif total:
+            label += f"  ({total})"
+        self.tabs.setTabText(idx, label)
+
+    def start_watch_refresh(self, lookback_days: int) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            QMessageBox.information(self, "Busy", "A job is already running.")
+            return
+        if not sum(self.watch.count_by_kind().values()):
+            QMessageBox.information(
+                self, "Watchlist empty",
+                "Star some rows in the Clusters tab first — click the ★ column.",
+            )
+            return
+        settings = self.controls.apply_to_settings()
+        self.data_panel.append_log(
+            f"\n=== WATCHLIST REFRESH · last {lookback_days} day(s) ==="
+        )
+        self.set_status("Checking watched items...")
+        worker = WatchRefreshWorker(self.db, settings, self.watch, lookback_days, self)
+        worker.message.connect(self.data_panel.append_log)
+        worker.failed.connect(self._on_failed)
+        worker.finished_ok.connect(self._on_watch_refreshed)
+        self._start(worker)
+
+    def _on_watch_refreshed(self, n_events: int) -> None:
+        self.watchlist_panel.reload()
+        self.data_panel.refresh()
+        self._refresh_db_label()
+        self._refresh_watch_badge()
+        self.set_status(
+            f"Watchlist refreshed — {n_events} new event(s)."
+            if n_events else "Watchlist refreshed — nothing changed."
+        )
+
     def search_markets(self, term: str) -> None:
         worker = MarketSearchWorker(self.settings, term, self)
         worker.results.connect(self.controls.show_market_results)
@@ -389,6 +452,8 @@ class MainWindow(QMainWindow):
         self.result = result
         self.clusters_panel.set_result(result)
         self.compare_panel.set_result(result)
+        self.watchlist_panel.set_result(result)
+        self._refresh_watch_badge()
         if result.ok:
             self.tabs.setCurrentWidget(self.clusters_panel)
             s = result.stats

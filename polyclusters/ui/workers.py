@@ -153,6 +153,137 @@ class TagBootstrapWorker(_Cancellable):
         return total
 
 
+class WatchRefreshWorker(_Cancellable):
+    """Pull fresh activity for watched items and turn the changes into events."""
+
+    finished_ok = Signal(int)  # number of events recorded
+
+    def __init__(
+        self,
+        db: Database,
+        settings: AppSettings,
+        store: Any,
+        lookback_days: int = 30,
+        parent: QObject | None = None,
+    ):
+        super().__init__(parent)
+        self.db = db
+        self.settings = settings
+        self.store = store
+        self.lookback_days = lookback_days
+
+    def run(self) -> None:  # noqa: D102
+        try:
+            self.finished_ok.emit(asyncio.run(self._refresh()))
+        except Exception:  # noqa: BLE001
+            self.failed.emit(traceback.format_exc())
+
+    async def _refresh(self) -> int:
+        import time
+
+        from ..core.watchlist import diff_wallet, observe_bet, observe_wallet
+        from ..ingest.gamma import fetch_markets_by_condition, normalise_market
+        from ..ingest.trades import fetch_user_activity, normalise_trades, profile_rows
+
+        items = self.store.items()
+        if not items:
+            self.message.emit("Watchlist is empty; nothing to refresh.")
+            return 0
+
+        wallets = {i.ref["wallet"] for i in items if i.kind == "member"}
+        wallets |= {i.ref["wallet"] for i in items if i.kind == "position"}
+        for item in items:
+            if item.kind == "cluster":
+                wallets |= set(item.ref.get("wallets") or [])
+        bet_keys = {i.ref["bet_key"] for i in items if i.kind in ("bet", "position")}
+
+        now = int(time.time())
+        events = 0
+
+        async with PolymarketClient(
+            concurrency=self.settings.max_concurrency,
+            rate_per_sec=self.settings.requests_per_second,
+            timeout=self.settings.request_timeout,
+            max_retries=self.settings.max_retries,
+        ) as client:
+            # --- 1. follow each watched wallet everywhere it traded ---------
+            self.message.emit(f"Following {len(wallets)} watched wallet(s)...")
+            seen_conditions: set[str] = set()
+            for n, wallet in enumerate(sorted(wallets), start=1):
+                if self.is_cancelled():
+                    break
+                start = now - self.lookback_days * 86_400
+                try:
+                    raw = await fetch_user_activity(
+                        client, wallet, start, now, cancelled=self.is_cancelled
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.message.emit(f"  ! {wallet[:10]}: {exc}")
+                    continue
+                if raw:
+                    trades = normalise_trades(raw)
+                    self.db.upsert_trades(trades)
+                    self.db.upsert_users(profile_rows(raw))
+                    seen_conditions |= set(trades.condition_id.dropna())
+                self.message.emit(f"  [{n}/{len(wallets)}] {wallet[:10]} "
+                                  f"+{len(raw)} activity rows")
+
+            # --- 2. fill in metadata for any market we have not seen --------
+            wanted = {k.rpartition(":")[0] for k in bet_keys} | seen_conditions
+            known = self.db.query("SELECT condition_id FROM markets")
+            missing = sorted(wanted - set(known.condition_id if not known.empty else []))
+            if missing and not self.is_cancelled():
+                self.message.emit(f"Fetching metadata for {len(missing)} new market(s)...")
+                raw_markets = await fetch_markets_by_condition(client, missing)
+                rows = [normalise_market(m, (m.get("events") or [{}])[0]) for m in raw_markets]
+                if rows:
+                    self.db.upsert_markets(pd.DataFrame(rows))
+
+            # --- 3. refresh resolution status of watched markets ------------
+            watched_conditions = sorted({k.rpartition(":")[0] for k in bet_keys})
+            if watched_conditions and not self.is_cancelled():
+                raw_markets = await fetch_markets_by_condition(client, watched_conditions)
+                rows = [normalise_market(m, (m.get("events") or [{}])[0]) for m in raw_markets]
+                if rows:
+                    self.db.upsert_markets(pd.DataFrame(rows))
+
+        # --- 4. diff every watched item against its stored snapshot ---------
+        self.message.emit("Comparing against the last snapshot...")
+        for item in items:
+            if item.kind in ("member", "position"):
+                wallet = item.ref["wallet"]
+                after = observe_wallet(self.db, wallet)
+                for kind, severity, summary, detail in diff_wallet(item.snapshot, after):
+                    if item.kind == "position" and detail.get("bet_key") != item.ref.get("bet_key"):
+                        continue  # a position watch only cares about its own bet
+                    self.store.record_event(item.item_id, kind, severity, summary, detail)
+                    events += 1
+                self.store.save_snapshot(item.item_id, after)
+            elif item.kind == "bet":
+                after = observe_bet(self.db, item.ref["bet_key"])
+                before = item.snapshot or {}
+                if after.get("resolved") and not before.get("resolved"):
+                    verdict = "WON" if after.get("won") else "LOST"
+                    self.store.record_event(
+                        item.item_id, "resolved",
+                        "alert" if after.get("won") else "info",
+                        f"“{after.get('question', '')[:60]}” resolved — {verdict}",
+                        after,
+                    )
+                    events += 1
+                elif before.get("traders") and after.get("traders", 0) > before["traders"]:
+                    self.store.record_event(
+                        item.item_id, "new_position", "info",
+                        f"{after['traders'] - before['traders']} new trader(s) entered "
+                        f"“{after.get('question', '')[:50]}”", after,
+                    )
+                    events += 1
+                self.store.save_snapshot(item.item_id, after)
+
+        self.message.emit(f"Watchlist refresh done — {events} new event(s).")
+        return events
+
+
 class MarketSearchWorker(_Cancellable):
     """Looks up markets by free text for the 'analyse this exact bet' picker."""
 
