@@ -253,6 +253,19 @@ QToolBar#brandBar::separator {{ width: 0; height: 0; }}
 /* Labels inside the toolbar otherwise paint their own panel background. */
 QToolBar#brandBar QLabel {{ background: transparent; }}
 QLabel#brandLogo {{ background: transparent; }}
+/* Plain QWidgets inherit the base background, which on the brand strip shows up
+   as a dark band between the logo and the Help button. */
+QWidget#brandSpacer {{ background: transparent; }}
+QPushButton#brandHelp {{
+    background: transparent;
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    padding: 5px 16px;
+    margin-right: 10px;
+    color: {FG_DIM};
+}}
+QPushButton#brandHelp:hover {{ color: {FG}; border-color: {ACCENT}; background: {BG_ALT}; }}
+QPushButton#brandHelp:pressed {{ background: {ACCENT_DIM}; color: #ffffff; }}
 
 QLabel#h1 {{ font-size: 15px; font-weight: 700; }}
 QLabel#dim {{ color: {FG_DIM}; }}

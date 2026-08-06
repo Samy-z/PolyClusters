@@ -8,8 +8,8 @@ import pandas as pd
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QStatusBar, QTabWidget,
-    QToolBar, QWidget,
+    QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSizePolicy,
+    QStatusBar, QTabWidget, QToolBar, QWidget,
 )
 
 # Rendered height of the logo strip, in logical pixels.
@@ -133,11 +133,13 @@ class MainWindow(QMainWindow):
 
     # -- branding -----------------------------------------------------------
     def _build_header(self) -> None:
-        """Logo strip directly beneath the menu bar.
+        """The logo strip, and the only chrome above the workspace.
 
         A top toolbar spans the full window width above the dock area, which is
         what puts the mark in the true top-left corner; a header inside the
         central widget would sit to the right of the Controls dock instead.
+        Help sits at the far end of the same strip, so the window needs no menu
+        bar at all.
         """
         source = LOGO_DISPLAY_DARK if LOGO_DISPLAY_DARK.exists() else LOGO_DISPLAY
         bar = QToolBar("Branding", self)
@@ -162,6 +164,20 @@ class MainWindow(QMainWindow):
         logo.setContentsMargins(10, 4, 12, 4)
         logo.setToolTip("PolyClusters — Polymarket co-betting cluster analysis")
         bar.addWidget(logo)
+
+        # Help now lives on this strip rather than in a menu bar of its own.
+        spacer = QWidget()
+        spacer.setObjectName("brandSpacer")
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        bar.addWidget(spacer)
+
+        help_button = QPushButton("Help")
+        help_button.setObjectName("brandHelp")
+        help_button.setToolTip("How this works  (F1)")
+        help_button.setCursor(Qt.PointingHandCursor)
+        help_button.clicked.connect(self._show_help)
+        bar.addWidget(help_button)
+        self.help_button = help_button
 
         # The logo is part of the app's identity, not an optional panel, so its
         # toggle is kept out of the toolbar/dock context menu entirely.
@@ -208,37 +224,46 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _build_menu(self) -> None:
-        run_menu = self.menuBar().addMenu("&Run")
-        act_ingest = QAction("&Fetch data", self)
+        """Window-level shortcuts, with no menu bar to hang them off.
+
+        Every command the Run and View menus held is already a button on the
+        control panel or reachable from the dock's right-click menu, so the bar
+        was a row of chrome for one genuinely useful item. The actions stay
+        registered on the window itself, which is what actually carries the
+        shortcuts - dropping the menu without this would silently take Ctrl+D,
+        Ctrl+R and Esc with it.
+        """
+        act_ingest = QAction("Fetch data", self)
         act_ingest.setShortcut(QKeySequence("Ctrl+D"))
+        act_ingest.setShortcutContext(Qt.ApplicationShortcut)
         act_ingest.triggered.connect(
             lambda: self.start_ingest(self.controls.filters(),
                                       self.controls.refresh_tags_check.isChecked())
         )
-        run_menu.addAction(act_ingest)
 
-        act_analyse = QAction("&Run analysis", self)
+        act_analyse = QAction("Run analysis", self)
         act_analyse.setShortcut(QKeySequence("Ctrl+R"))
+        act_analyse.setShortcutContext(Qt.ApplicationShortcut)
         act_analyse.triggered.connect(
             lambda: self.start_analysis(self.controls.filters(),
                                         self.controls.cluster_params())
         )
-        run_menu.addAction(act_analyse)
 
-        act_cancel = QAction("&Cancel", self)
+        act_cancel = QAction("Cancel", self)
         act_cancel.setShortcut(QKeySequence("Esc"))
+        act_cancel.setShortcutContext(Qt.ApplicationShortcut)
         act_cancel.triggered.connect(self.cancel_job)
-        run_menu.addAction(act_cancel)
 
-        view_menu = self.menuBar().addMenu("&View")
         act_dock = self.controls_dock.toggleViewAction()
-        act_dock.setText("Show &controls")
-        view_menu.addAction(act_dock)
+        act_dock.setText("Show controls")
 
-        help_menu = self.menuBar().addMenu("&Help")
-        act_about = QAction("&How this works", self)
-        act_about.triggered.connect(self._show_help)
-        help_menu.addAction(act_about)
+        self.act_help = QAction("How this works", self)
+        self.act_help.setShortcut(QKeySequence("F1"))
+        self.act_help.setShortcutContext(Qt.ApplicationShortcut)
+        self.act_help.triggered.connect(self._show_help)
+
+        for action in (act_ingest, act_analyse, act_cancel, act_dock, self.act_help):
+            self.addAction(action)
 
     def _first_run_hint(self) -> None:
         stats = self.db.stats()
