@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "PolyClusters"
+# Incremented when a stored setting must be re-derived from the new default.
+SETTINGS_VERSION = 2
 LEGACY_APP_NAME = "PolyCluster"  # pre-rename; existing data is migrated across
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
@@ -86,9 +88,13 @@ def settings_path() -> Path:
 class AppSettings:
     """User-tunable knobs persisted between runs."""
 
-    # Networking
-    max_concurrency: int = 8
-    requests_per_second: float = 12.0
+    # Networking. Measured against the live API with *distinct* URLs (hammering
+    # one URL reads far faster because the server caches it, which flatters the
+    # numbers): throughput climbs to roughly 25-30 req/s and then flattens into
+    # noise, so these sit at the knee rather than chasing a higher figure that
+    # only invites throttling.
+    max_concurrency: int = 12
+    requests_per_second: float = 30.0
     request_timeout: float = 45.0
     max_retries: int = 4
 
@@ -130,6 +136,9 @@ class AppSettings:
     # Remembered sector picks, so a scoped run stays scoped between sessions.
     selected_tag_ids: list[int] = field(default_factory=list)
 
+    # Bumped when a stored default becomes wrong rather than merely different.
+    settings_version: int = SETTINGS_VERSION
+
     def save(self) -> None:
         settings_path().write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
@@ -142,6 +151,16 @@ class AppSettings:
             raw: dict[str, Any] = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return cls()
+
+        # A saved file pins every value it holds, so tuning a default does
+        # nothing for anyone who has already run the app once. Networking is
+        # the case that matters: leaving the old rate in place would keep the
+        # crawl at a third of its speed with no way for the user to know why.
+        if int(raw.get("settings_version", 1)) < SETTINGS_VERSION:
+            for stale in ("max_concurrency", "requests_per_second"):
+                raw.pop(stale, None)
+            raw["settings_version"] = SETTINGS_VERSION
+
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in raw.items() if k in known})
 

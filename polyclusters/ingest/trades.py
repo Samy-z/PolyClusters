@@ -10,6 +10,7 @@ no matter how heavily traded the market is.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from typing import Any, Callable
@@ -116,44 +117,81 @@ class TradeCrawler:
         min_trade_usd: float = 0.0,
         progress: ProgressFn | None = None,
         cancelled: CancelFn | None = None,
+        max_page_batch: int = 8,
     ):
         self.client = client
         self.taker_only = taker_only
         self.min_trade_usd = min_trade_usd
+        self.max_page_batch = max(1, max_page_batch)
         self.progress = progress or (lambda _m: None)
         self.cancelled = cancelled or (lambda: False)
         self.truncated_slices = 0
 
+    async def _fetch_page(
+        self, condition_id: str, start: int, end: int, offset: int
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "market": condition_id,
+            "limit": TRADES_MAX_LIMIT,
+            "offset": offset,
+            "takerOnly": self.taker_only,
+            "start": start,
+            "end": end,
+        }
+        if self.min_trade_usd > 0:
+            params["filterType"] = "CASH"
+            params["filterAmount"] = self.min_trade_usd
+        batch = await self.client.data("/trades", **params)
+        return batch if isinstance(batch, list) else []
+
     async def _page_slice(
         self, condition_id: str, start: int, end: int
     ) -> tuple[list[dict[str, Any]], bool]:
-        """Page one time slice. Returns (rows, hit_offset_ceiling)."""
+        """Page one time slice. Returns (rows, hit_offset_ceiling).
+
+        Pages are fetched in a doubling batch rather than one at a time. Most
+        markets fit in a single page, so the ramp starts at one and no requests
+        are wasted on them; a dense market reaches full parallelism within a
+        few rounds instead of paying one round trip per 500 trades. Safe
+        because the window is bounded by start/end, so the result set does not
+        shift underneath us.
+        """
         rows: list[dict[str, Any]] = []
         offset = 0
+        batch_size = 1
+        rounds = 0
         while offset <= TRADES_MAX_OFFSET:
             if self.cancelled():
                 return rows, False
-            params: dict[str, Any] = {
-                "market": condition_id,
-                "limit": TRADES_MAX_LIMIT,
-                "offset": offset,
-                "takerOnly": self.taker_only,
-                "start": start,
-                "end": end,
-            }
-            if self.min_trade_usd > 0:
-                params["filterType"] = "CASH"
-                params["filterAmount"] = self.min_trade_usd
-            try:
-                batch = await self.client.data("/trades", **params)
-            except DataApiLimit:
-                return rows, True
-            if not isinstance(batch, list) or not batch:
+            offsets = [
+                offset + i * TRADES_MAX_LIMIT
+                for i in range(batch_size)
+                if offset + i * TRADES_MAX_LIMIT <= TRADES_MAX_OFFSET
+            ]
+            if not offsets:
+                break
+            results = await asyncio.gather(
+                *(self._fetch_page(condition_id, start, end, o) for o in offsets),
+                return_exceptions=True,
+            )
+            exhausted = False
+            for res in results:
+                if isinstance(res, DataApiLimit):
+                    return rows, True
+                if isinstance(res, BaseException):
+                    raise res
+                rows.extend(res)
+                if len(res) < TRADES_MAX_LIMIT:
+                    exhausted = True
+            if exhausted:
                 return rows, False
-            rows.extend(batch)
-            if len(batch) < TRADES_MAX_LIMIT:
-                return rows, False
-            offset += TRADES_MAX_LIMIT
+            offset += len(offsets) * TRADES_MAX_LIMIT
+            # Hold at one page for the first two rounds. Almost every market
+            # fits in one or two pages, and speculating on them costs a wasted
+            # request each; with hundreds of markets running at once the
+            # parallelism is already there. Only genuinely deep markets ramp.
+            rounds += 1
+            batch_size = 1 if rounds < 2 else min(max(batch_size, 1) * 2, self.max_page_batch)
         # Exhausted the allowed offset range with a full final page: there is
         # more data in this slice than the API will hand over.
         return rows, True
@@ -177,8 +215,11 @@ class TradeCrawler:
             return rows
         mid = start + span // 2
         self.progress(f"  ~ splitting dense slice ({span}s) for {condition_id[:10]}")
-        left = await self.crawl_market(condition_id, start, mid, depth + 1)
-        right = await self.crawl_market(condition_id, mid + 1, end, depth + 1)
+        # Both halves at once; the client's own limiter decides the real pace.
+        left, right = await asyncio.gather(
+            self.crawl_market(condition_id, start, mid, depth + 1),
+            self.crawl_market(condition_id, mid + 1, end, depth + 1),
+        )
         return left + right
 
 

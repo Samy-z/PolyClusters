@@ -231,9 +231,16 @@ class Ingestor:
             progress=self.progress,
             cancelled=self.cancelled,
         )
-        sem = asyncio.Semaphore(max(1, self.settings.max_concurrency // 2))
+        # Markets run wider than the connection limit on purpose. The client's
+        # own semaphore and token bucket set the real pace; this only has to be
+        # generous enough to keep them saturated while some tasks are parsing
+        # or writing rather than waiting on the network.
+        sem = asyncio.Semaphore(max(4, self.settings.max_concurrency * 2))
         done = 0
         lock = asyncio.Lock()
+
+        # One query for every market's coverage, rather than one per market.
+        coverage = self.db.covered_windows_bulk(markets.condition_id.tolist())
 
         async def one(row: Any) -> None:
             nonlocal done
@@ -243,7 +250,7 @@ class Ingestor:
                 filters.start_ts or int(row.start_ts or 0),
                 filters.end_ts or now_ts(),
             )
-            gaps = subtract_covered((lo, hi), self.db.covered_windows(cid))
+            gaps = subtract_covered((lo, hi), coverage.get(cid, []))
             if not gaps:
                 async with lock:
                     done += 1
@@ -254,15 +261,23 @@ class Ingestor:
                 if self.cancelled():
                     return
                 try:
+                    raw_all: list[dict[str, Any]] = []
+                    windows: list[tuple[str, int, int, int]] = []
                     for g_lo, g_hi in gaps:
                         raw = await crawler.crawl_market(cid, g_lo, g_hi)
-                        if raw:
-                            trades = normalise_trades(raw)
-                            n = self.db.upsert_trades(trades)
-                            self.db.upsert_users(profile_rows(raw))
-                            async with lock:
-                                report.trades_added += n
-                        self.db.log_window(cid, g_lo, g_hi, len(raw), False, now_ts())
+                        raw_all.extend(raw)
+                        windows.append((cid, g_lo, g_hi, len(raw)))
+                    # Parsing and writing are pure CPU plus a database lock;
+                    # doing them inline stalls every other in-flight request.
+                    n = await asyncio.to_thread(
+                        self.db.store_crawl_batch,
+                        normalise_trades(raw_all) if raw_all else pd.DataFrame(),
+                        profile_rows(raw_all) if raw_all else pd.DataFrame(),
+                        windows,
+                        now_ts(),
+                    )
+                    async with lock:
+                        report.trades_added += n
                 except Exception as exc:  # noqa: BLE001 - one bad market must not kill the run
                     async with lock:
                         report.errors.append(f"{cid[:12]}: {exc}")

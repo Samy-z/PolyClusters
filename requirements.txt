@@ -7,3 +7,4 @@ networkx>=3.3
 httpx>=0.27
 pyqtgraph>=0.13
 truststore>=0.9
+h2>=4.1

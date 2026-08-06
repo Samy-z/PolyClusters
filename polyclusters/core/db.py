@@ -307,6 +307,46 @@ class Database:
                 [condition_id, start, end, n, truncated, now],
             )
 
+    def covered_windows_bulk(
+        self, condition_ids: Sequence[str]
+    ) -> dict[str, list[tuple[int, int]]]:
+        """Coverage for many markets in one query.
+
+        The per-market version costs one round trip and one lock acquisition
+        each, which on a few thousand markets dominates the crawl before a
+        single request has been sent.
+        """
+        if not condition_ids:
+            return {}
+        self.stage_temp("_cov_ids", pd.DataFrame({"condition_id": list(condition_ids)}))
+        df = self.query(
+            """
+            SELECT l.condition_id, l.window_start, l.window_end
+            FROM ingest_log l JOIN _cov_ids USING (condition_id)
+            WHERE l.truncated = FALSE
+            """
+        )
+        self.drop_temp("_cov_ids")
+        out: dict[str, list[tuple[int, int]]] = {}
+        for cid, lo, hi in zip(df.condition_id, df.window_start, df.window_end):
+            out.setdefault(cid, []).append((int(lo), int(hi)))
+        return out
+
+    def store_crawl_batch(
+        self,
+        trades: pd.DataFrame,
+        users: pd.DataFrame,
+        windows: list[tuple[str, int, int, int]],
+        now: int,
+    ) -> int:
+        """One lock acquisition for a whole market's results."""
+        n = self.upsert_trades(trades) if trades is not None and not trades.empty else 0
+        if users is not None and not users.empty:
+            self.upsert_users(users)
+        for cid, lo, hi, count in windows:
+            self.log_window(cid, lo, hi, count, False, now)
+        return n
+
     def covered_windows(self, condition_id: str) -> set[tuple[int, int]]:
         df = self.query(
             "SELECT window_start, window_end FROM ingest_log "
